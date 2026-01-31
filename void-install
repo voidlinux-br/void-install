@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: dom 25 jan 2026 22:30:14 -04
+#  Updated: sáb 31 jan 2026 07:58:03 -04
 #
 #  Copyright (c) 2022-2025, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.1.25-20260125'
+readonly _VERSION_='3.1.31-20260131'
 readonly DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr chroot blkid fdisk parted lsblk curl xz mkfs.vfat tee lvm cryptsetup gettext)
 readonly LOCKFILE="/tmp/void-install.lock"
 
@@ -464,7 +464,7 @@ sh_update_self() {
 
 sh_choose_common_packages() {
 	declare -ga aSuplemento=(
-		chili-void-grub-theme
+		voidbr-grub-theme
 		#	   voidbr-plymouth-theme
 		chili-utils
 		void-utils
@@ -2392,10 +2392,42 @@ sh_sway_minimal() {
 
 sh_mate_minimal() {
 	local DE='Mate'
-	local apkgs=('mate' 'mate-extra' 'mate-applets' 'atril' 'caja-image-converter' 'caja-open-terminal' 'caja-sendto'
-		'caja-share' 'caja-wallpaper' 'caja-xattr-tags' 'engrampa' 'eom' 'mate-calc' 'mate-icon-theme-faenza'
-		'mate-media' 'mate-netbook' 'mate-power-manager' 'mate-screensaver' 'mate-sensors-applet' 'mate-system-monitor'
-		'mate-terminal' 'mate-utils' 'mozo' 'pluma' 'mate-backgrounds')
+	local apkgs=(mate
+		mate-applets
+		mate-common
+		mate-extra
+		mate-backgrounds
+		mate-calc
+		mate-icon-theme-faenza
+		mate-media
+		mate-netbook
+		mate-power-manager
+		mate-screensaver
+		mate-sensors-applet
+		mate-system-monitor
+		mate-terminal
+		mate-utils
+		atril
+		caja-image-converter
+		caja-open-terminal
+		caja-sendto
+		caja-share
+		caja-wallpaper
+		caja-xattr-tags
+		engrampa
+		eom
+		mozo
+		pluma
+		plank
+		brisk-menu
+	)
+	apkgs+=(
+		voidbr-mate-config
+		voidbr-wallpapers
+		voidbr-tokyo-theme
+		voidbr-professional-theme
+		voidbr-beauty-icons
+	)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -4119,11 +4151,10 @@ GRUB_DISTRIBUTOR="Void"
 #GRUB_COLOR_NORMAL="light-blue/black"
 #GRUB_COLOR_HIGHLIGHT="light-cyan/blue"
 GRUB_CMDLINE_LINUX_DEFAULT="loglevel=3 quiet splash"
-GRUB_THEME="/boot/grub/themes/chili/theme.txt"
+GRUB_THEME="/boot/grub/themes/voidbr/theme.txt"
 EOF
 
-	#	echo "GRUB_THEME=/boot/grub/themes/void/theme.txt" >>"$dir_install/etc/default/grub"
-	echo "GRUB_THEME=/boot/grub/themes/chili/theme.txt" >>"$dir_install/etc/default/grub"
+	echo "GRUB_THEME=/boot/grub/themes/voidbr/theme.txt" >>"$dir_install/etc/default/grub"
 	if $LOSPROBER; then
 		echo "GRUB_DISABLE_OS_PROBER=false" >>"$dir_install/etc/default/grub"
 	else
@@ -4303,7 +4334,6 @@ sh_install_prereqs() {
 		"LC_ALL=C xbps-install --rootdir "$dir_install" --repository=${url_mirror}/current -c $CACHEDIR -y $REQUIRED_PKGS -S"
 }
 
-#dom 03 mar 2024 09:35:25 -04
 sh_extract_root_fs() {
 	if [[ "${AConfMirror[_SOURCE]}" = "local" ]]; then
 		sh_cp_rootfs
@@ -4326,15 +4356,46 @@ sh_install_pkgs_in_chroot() {
 		"$err_not_fatal"
 }
 
+sh_get_session_name() {
+    local SESSION_NAME=xfce
+    local NEWROOT="$dir_install"
+
+    if [ -x "${NEWROOT}"/usr/bin/startxfce4 ]; then
+        SESSION_NAME=xfce
+    elif [ -x "${NEWROOT}"/usr/bin/startplasma-wayland ]; then
+        SESSION_NAME=plasma
+    elif [ -x "${NEWROOT}"/usr/bin/enlightenment_start ]; then
+        SESSION_NAME=enlightenment
+    elif [ -x "${NEWROOT}"/usr/bin/awesome ]; then
+        SESSION_NAME=awesome
+    elif [ -x "${NEWROOT}"/usr/bin/gnome-session ]; then
+        SESSION_NAME=gnome
+    elif [ -x "${NEWROOT}"/usr/bin/mate-session ]; then
+        SESSION_NAME=mate
+    elif [ -x "${NEWROOT}"/usr/bin/cinnamon-session ]; then
+        SESSION_NAME=cinnamon
+    elif [ -x "${NEWROOT}"/usr/bin/i3 ]; then
+        SESSION_NAME=i3
+    elif [ -x "${NEWROOT}"/usr/bin/startlxde ]; then
+        SESSION_NAME=startlxde
+    elif [ -x "${NEWROOT}"/usr/bin/startlxqt ]; then
+        SESSION_NAME=startlxqt
+    elif [ -x "${NEWROOT}"/usr/bin/startfluxbox ]; then
+        SESSION_NAME=startfluxbox
+    fi
+    echo $SESSION_NAME
+}
+
 sh_update_lxdm_conf() {
 	local cfile="$dir_install/etc/lxdm/lxdm.conf"
+	local cuser="${AsUser[cuser]}"
 
-	sh_info_msg "Customizando ${cfile}"
-	cat >"$cfile" <<EOF
+	sh_info_msg "Customizando $cfile"
+    mkdir -p "$dir_install/etc/lxdm"
+    cat >"$cfile" <<EOF
 [base]
-autologin="${AsUser[cuser]}"
+autologin=$cuser
 # timeout=10
-# session=/usr/bin/startlxde
 session=/usr/bin/startxfce4
 numlock=1
 # xauth_path=/tmp
@@ -4361,6 +4422,22 @@ transparent_pane=1
 disable=0
 white=
 black=
+EOF
+}
+
+sh_update_sddm_conf() {
+	local cfile="$dir_install/etc/sddm.d/00-autologin.conf"
+	local cuser="${AsUser[cuser]}"
+    local SESSION_NAME=$(sh_get_session_name)
+
+	sh_info_msg "Customizando SDDM $cfile"
+    mkdir -p "$dir_install/etc/sddm.conf.d"
+    cat >"$cfile" <<EOF
+[Autologin]
+Enable=true
+User=$cuser
+#Session=xfce.desktop
+Session=$SESSION_NAME
 EOF
 }
 
@@ -4517,8 +4594,8 @@ sh_install() {
 			sh_activating_services
 
 			sh_chroot_job "$(gettext 'Ajustando e validando configuração em:') $dir_install" "
-#               xbps-reconfigure --force --all
-                xbps-reconfigure --all
+                xbps-reconfigure --force glibc-locales
+                xbps-reconfigure --force --all
             "
 
 			sh_chroot_job "${cmsg_RemovendoPacotesAntigosObseletos}" "
@@ -4531,6 +4608,7 @@ sh_install() {
 			fi
 
 			sh_update_lxdm_conf
+			sh_update_sddm_conf
 			sh_chmod_tmp
 			sh_umount_fs
 			end_datetime=$(date)
@@ -5167,7 +5245,7 @@ sh_main_menu() {
 		"${cmsg_Teclado}") sh_chooseKeymap && [ -n "$LKEYMAP" ] && DEFITEM="Timezone" ;;
 		"Timezone") sh_chooseTimezone && [ -n "$LTIMEZONE" ] && DEFITEM="Wm" ;;
 		"Locale") sh_chooseLocale && [ -n "$LTIMEZONE" ] && DEFITEM="Wm" ;;
-		"Wm") sh_choose_wm && [ -n "$LWM" ] && DEFITEM="Extra" ;;
+		"Wm") sh_choose_wm && [ -n "$LWM" ] && DEFITEM="${cmsg_Usuario}" ;;
 		"${cmsg_Usuario}") sh_confadduser "$@" && [ -n "$LEXTRA" ] && DEFITEM="Audio" ;;
 		"Audio") sh_chooseaudioserver "$@" && [ -n "$LAUDIO" ] && DEFITEM="${cmsg_Instalar}" ;;
 		"${cmsg_Instalar}") sh_install ;;
@@ -6169,3 +6247,4 @@ sh_setMknodTty
 #sh_menu_language "$@"
 for x in "${appexec[@]}"; do $x; done
 sh_enablePrintk
+
