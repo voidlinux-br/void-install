@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: sex 06 fev 2026 01:23:06 -04
+#  Updated: dom 08 fev 2026 17:26:07 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.2.06-20260206'
+readonly _VERSION_='3.2.08-20260208'
 readonly DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr chroot blkid fdisk parted lsblk curl xz mkfs.vfat tee lvm cryptsetup gettext)
 readonly LOCKFILE="/tmp/void-install.lock"
 
@@ -514,6 +514,9 @@ sh_choose_common_packages() {
 		git
 		nano
 		vim
+		micro
+		xz
+		zstd
 	)
 
 	if $LXORG; then
@@ -565,9 +568,9 @@ sh_choose_common_packages() {
 		declare -ga aPrinter=(cups system-config-printer system-config-printer-udev splix samsung-unified-driver brother-brlaser cups-pdf)
 		declare -ga aFilemanager=()
 		declare -ga aTerminal=(rxvt-unicode cool-retro-term)
-		declare -ga aEditorX=(kate mousepad)
+		declare -ga aEditorX=(kate mousepad libreoffice libreoffice-i18n-pt-BR)
 		declare -ga aNetworkX=(gvfs gvfs-smb gvfs-mtp gvfs-afc gvfs-cdda udisks2)
-		declare -ga aUtilityX=(mate-calc xkill menulibre mugshot ocs-url gparted)
+		declare -ga aUtilityX=(mate-calc xkill menulibre mugshot ocs-url gparted vlc celluloid)
 		## tty
 		declare -ga aDaemons=(acpi acpid irqbalance avahi avahi-discover)
 		declare -ga aArchiverTty=(unrar zip p7zip unzip bzip2)
@@ -585,9 +588,9 @@ sh_choose_common_packages() {
 		declare -ga aPerfumery=()
 		declare -ga aPrinter=()
 		declare -ga aTerminal=()
-		declare -ga aEditorX=()
+		declare -ga aEditorX=(mousepad libreoffice libreoffice-i18n-pt-BR)
 		declare -ga aNetworkX=()
-		declare -ga aUtilityX=()
+		declare -ga aUtilityX=(vlc celluloid)
 		## tty
 		declare -ga aDaemons=()
 		declare -ga aArchiverTty=()
@@ -1540,10 +1543,16 @@ repository=${url_mirror}/current/multilib
 repository=${url_mirror}/current/multilib/nonfree
 
 repository=https://void.chililinux.com/voidlinux/current
-#repository=https://void.chililinux.com/voidlinux/current/extras
+#repository=https://void.chililinux.com/voidlinux/current/extra
 #repository=https://void.chililinux.com/voidlinux/current/nonfree
 #repository=https://void.chililinux.com/voidlinux/current/multilib
 #repository=https://void.chililinux.com/voidlinux/current/multilib/nonfree
+
+repository=https://void.voidbr.org/voidlinux/current
+#repository=https://void.voidbr.org/voidlinux/current/extra
+#repository=https://void.voidbr.org/voidlinux/current/nonfree
+#repository=https://void.voidbr.org/voidlinux/current/multilib
+#repository=https://void.voidbr.org/voidlinux/current/multilib/nonfree
 EOF
    " $err_not_fatal
 }
@@ -1895,6 +1904,11 @@ sh_make_user() {
       cp -Rpva $dir_install/etc/skel/.git-prompt.sh $dir_install/root/
    " $err_not_fatal
 
+	sh_cmd_job "$(gettext 'Removendo link do instalador')" "
+        rm -f $dir_install/home/$user/'Área de trabalho'/void-install.desktop
+        rm -f $dir_install/home/$user/Área\ de\ trabalho/void-install.desktop
+   " $err_not_fatal
+
 	sh_update_sudoers
 }
 
@@ -2190,14 +2204,14 @@ sh_X11_minimal() {
 	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Icones')" "${aIconsAndThemes[*]}"
 	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM')" "${aDisplaymanager[*]}"
 	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM Config')" "${aDisplaymanagerConfig[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Terminal')" "${aTerminal[*]}"
+	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Terminais')" "${aTerminal[*]}"
 	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote FileManager')" "${aFilemanager[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Navegadore')" "${aBrowser[*]}"
+	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Navegadores')" "${aBrowser[*]}"
 	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Bluetooth')" "${aBluetooth[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Utilitário')" "${aUtilityX[*]}"
+	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Utilitários')" "${aUtilityX[*]}"
 	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Media')" "${aMedia[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Impressora')" "${aPrinter[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Perfumaria')" "${aPerfumery[*]}"
+	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Impressoras')" "${aPrinter[*]}"
+	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Perfumarias')" "${aPerfumery[*]}"
 	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Archivadores')" "${aArchiverX[*]}"
 }
 
@@ -2229,7 +2243,7 @@ sh_openbox_minimal() {
 }
 
 sh_plasma_minimal() {
-	local apkgs=('plasma-desktop' 'plasma-nm' 'plasma-pa' 'plasma-disks')
+	local apkgs=(plasma-desktop plasma-nm plasma-pa plasma-disks kate konsole dolphin)
 	local DE='Plasma Desktop'
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -3073,6 +3087,7 @@ sh_chooseMirror() {
 		[mirrors.servercentral.com]="https://mirrors.servercentral.com/voidlinux/|North America|Chicago, USA|1"
 		[mirrors.cicku.me]="https://mirrors.cicku.me/voidlinux/|Globally Available|Cloudflare Global CDN|2"
 		[void.chililinux.com]="https://void.chililinux.com/voidlinux/|South and Central America|Pimenta Bueno, Brazil|2"
+		[void.voidbr.org]="https://void.voidbr.org/voidlinux/|South and Central America|Pimenta Bueno, Brazil|2"
 		[mirror.sjtu.edu.cn]="https://mirror.sjtu.edu.cn/voidlinux/|Asia|Shanghai, China|2"
 		[mirror.clarkson.edu]="https://mirror.clarkson.edu/voidlinux/|North America/|New York, USA|2"
 		[void.webconverger.org]="https://void.webconverger.org/|Asia|Singapore|2"
@@ -3938,7 +3953,11 @@ sh_choose_wm() {
 		_DISPLAYMANAGER="None"
 	else
 		AConfAudio[_AUDIOSERVER]="Pipewire"
-		_DISPLAYMANAGER="sddm"
+	    if grep -qi gnome <<<"${_WINDOWMANAGER[@]}"; then
+    		_DISPLAYMANAGER="gdm"
+        else
+    		_DISPLAYMANAGER="sddm"
+    	fi
 	fi
 	LAUDIO=true
 	LDM=true
