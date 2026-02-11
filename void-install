@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: dom 08 fev 2026 17:26:07 -04
+#  Updated: qua 11 fev 2026 00:42:27 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.2.08-20260208'
+readonly _VERSION_='3.2.11-20260211'
 readonly DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr chroot blkid fdisk parted lsblk curl xz mkfs.vfat tee lvm cryptsetup gettext)
 readonly LOCKFILE="/tmp/void-install.lock"
 
@@ -159,9 +159,12 @@ declare -gA AConfLocale=(
 )
 declare -gA AConfMirror=(
 	[_SOURCE]='network'
-	[_MIRROR]='repo.fastly.voidlinux.org'
-	[url_mirror]='https://repo-fastly.voidlinux.org'
-	[location]='Fastly Global CDN'
+#	[_MIRROR]='repo.fastly.voidlinux.org'
+#	[url_mirror]='https://repo-fastly.voidlinux.org'
+#	[location]='Fastly Global CDN'
+	[_MIRROR]='void.voidbr.org'
+	[url_mirror]='https://void.voidbr.org/voidlinux/'
+	[location]='M. do Paranapanema, Brazil'
 )
 declare -gA AConfAudio=(
 	[_AUDIOSERVER]='None'
@@ -568,7 +571,7 @@ sh_choose_common_packages() {
 		declare -ga aPrinter=(cups system-config-printer system-config-printer-udev splix samsung-unified-driver brother-brlaser cups-pdf)
 		declare -ga aFilemanager=()
 		declare -ga aTerminal=(rxvt-unicode cool-retro-term)
-		declare -ga aEditorX=(kate mousepad libreoffice libreoffice-i18n-pt-BR)
+		declare -ga aEditorX=(kate mousepad libreoffice libreoffice-i18n-$(sh_get_language_without_utf8))
 		declare -ga aNetworkX=(gvfs gvfs-smb gvfs-mtp gvfs-afc gvfs-cdda udisks2)
 		declare -ga aUtilityX=(mate-calc xkill menulibre mugshot ocs-url gparted vlc celluloid)
 		## tty
@@ -588,7 +591,7 @@ sh_choose_common_packages() {
 		declare -ga aPerfumery=()
 		declare -ga aPrinter=()
 		declare -ga aTerminal=()
-		declare -ga aEditorX=(mousepad libreoffice libreoffice-i18n-pt-BR)
+		declare -ga aEditorX=(mousepad libreoffice libreoffice-i18n-$(sh_get_language_without_utf8))
 		declare -ga aNetworkX=()
 		declare -ga aUtilityX=(vlc celluloid)
 		## tty
@@ -647,7 +650,8 @@ sh_setEnvironment() {
 	readonly LOGGER='/dev/tty8'
 	shell='/bin/sh'
 
-	: "${ccabec="$APP v${_VERSION_} - https://github.com/voidlinuxbr/void-install"}"
+	ccabec="\Z6${APP} \Z5v${_VERSION_} - \Znhttps://github.com/voidlinuxbr/void-install"
+	baseccabec="\Z6${APP} \Z5v${_VERSION_} - \Znhttps://github.com/voidlinuxbr/void-install"
 	: "${ccabecmin="$APP v${_VERSION_}"}"
 	: "${DIALOG=${DIALOG:-dialog}}"
 	: "${ARCH:=x86_64}"
@@ -829,11 +833,11 @@ sh_get_lang() {
 export -f sh_get_lang
 
 sh_get_language_without_utf8() {
-	local LangFilter="${LANG%%.*}"
-	local LangFilterModified="${LangFilter//_/-}"
-	echo "$LangFilterModified"
+#	local LangFilter="${LANG%%.*}"
+	local LangFilter="${AConfLocale[_LOCALE]%%.*}"
+    local LangFilterModified="${LangFilter//_/-}"
+    echo "$LangFilterModified"
 }
-export -f sh_get_language_without_utf8
 
 sh_get_code_language() {
 	local LangFilter="${LANGUAGE%%.*}"
@@ -1535,26 +1539,40 @@ sh_mkparted() {
 }
 
 sh_update_mirror() {
-	sh_cmd_job "${cmsg_Configurando} ${cmsg_Mirror,,}" "
-      cat >"$dir_install/etc/xbps.d/00-repository-main.conf" <<-EOF
-repository=${url_mirror}/current
-repository=${url_mirror}/current/nonfree
-repository=${url_mirror}/current/multilib
-repository=${url_mirror}/current/multilib/nonfree
+  sh_cmd_job "${cmsg_Configurando} ${cmsg_Mirror,,}" "
+    conf=\"${dir_install}/etc/xbps.d/00-repository-main.conf\"
 
-repository=https://void.chililinux.com/voidlinux/current
-#repository=https://void.chililinux.com/voidlinux/current/extra
-#repository=https://void.chililinux.com/voidlinux/current/nonfree
-#repository=https://void.chililinux.com/voidlinux/current/multilib
-#repository=https://void.chililinux.com/voidlinux/current/multilib/nonfree
+    {
+      # mirror escolhido (sempre primeiro)
+      echo \"repository=${url_mirror}/current\"
 
-repository=https://void.voidbr.org/voidlinux/current
-#repository=https://void.voidbr.org/voidlinux/current/extra
-#repository=https://void.voidbr.org/voidlinux/current/nonfree
-#repository=https://void.voidbr.org/voidlinux/current/multilib
-#repository=https://void.voidbr.org/voidlinux/current/multilib/nonfree
-EOF
-   " $err_not_fatal
+      if grep -qiE 'voidbr\\.org|chililinux' <<<\"${url_mirror}\"; then
+        echo \"repository=${url_mirror}/extra\"
+      fi
+
+      echo \"repository=${url_mirror}/current/nonfree\"
+      echo \"repository=${url_mirror}/current/multilib\"
+      echo \"repository=${url_mirror}/current/multilib/nonfree\"
+
+      # ChiliLinux (sempre presente)
+      if ! grep -qi 'chililinux' <<<\"${url_mirror}\"; then
+        echo \"repository=https://void.chililinux.com/voidlinux/current\"
+        echo \"repository=https://void.chililinux.com/voidlinux/extra\"
+        echo \"#repository=https://void.chililinux.com/voidlinux/current/nonfree\"
+        echo \"#repository=https://void.chililinux.com/voidlinux/current/multilib\"
+        echo \"#repository=https://void.chililinux.com/voidlinux/current/multilib/nonfree\"
+      fi
+
+      # VoidBR (sempre presente)
+      if ! grep -qi 'voidbr\\.org' <<<\"${url_mirror}\"; then
+        echo \"repository=https://void.voidbr.org/voidlinux/current\"
+        echo \"repository=https://void.voidbr.org/voidlinux/extra\"
+        echo \"repository=https://void.voidbr.org/voidlinux/current/nonfree\"
+        echo \"repository=https://void.voidbr.org/voidlinux/current/multilib\"
+        echo \"repository=https://void.voidbr.org/voidlinux/current/multilib/nonfree\"
+      fi
+    } > \"\$conf\"
+  " $err_not_fatal
 }
 
 sh_update_rc_conf() {
@@ -1907,6 +1925,7 @@ sh_make_user() {
 	sh_cmd_job "$(gettext 'Removendo link do instalador')" "
         rm -f $dir_install/home/$user/'Área de trabalho'/void-install.desktop
         rm -f $dir_install/home/$user/Área\ de\ trabalho/void-install.desktop
+        rm -f $dir_install//usr/share/applications/void-install.desktop
    " $err_not_fatal
 
 	sh_update_sudoers
@@ -2243,8 +2262,17 @@ sh_openbox_minimal() {
 }
 
 sh_plasma_minimal() {
-	local apkgs=(plasma-desktop plasma-nm plasma-pa plasma-disks kate konsole dolphin)
+	local apkgs=(kde5 plasma-desktop plasma-nm plasma-pa plasma-disks kate konsole dolphin)
 	local DE='Plasma Desktop'
+
+    apkgs+=(
+        voidbr-plasma-config
+        voidbr-wallpapers
+        voidbr-tokyo-theme
+        voidbr-professional-theme
+        voidbr-beauty-icons
+    )
+
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
@@ -3060,7 +3088,7 @@ sh_chooseTimezone() {
 	LTIMEZONE=true
 }
 
-sh_chooseMirror() {
+sh_choose_mirror() {
 	declare -A Aflag
 	local exit_status
 	local array
@@ -3086,8 +3114,9 @@ sh_chooseMirror() {
 		[mirrors.summithq.com]="https://mirrors.summithq.com/voidlinux/|North America|Chicago, USA|1"
 		[mirrors.servercentral.com]="https://mirrors.servercentral.com/voidlinux/|North America|Chicago, USA|1"
 		[mirrors.cicku.me]="https://mirrors.cicku.me/voidlinux/|Globally Available|Cloudflare Global CDN|2"
-		[void.chililinux.com]="https://void.chililinux.com/voidlinux/|South and Central America|Pimenta Bueno, Brazil|2"
-		[void.voidbr.org]="https://void.voidbr.org/voidlinux/|South and Central America|Pimenta Bueno, Brazil|2"
+		[void.chililinux.com]="https://void.chililinux.com/voidlinux/|South and Central America|Pimenta Bueno/RO, Brazil|2"
+		[void.voidlinux.com.br]="https://void.voidlinux.com.br/voidlinux/|South and Central America|Cacoal/RO, Brazil|2"
+		[void.voidbr.org]="https://void.voidbr.org/voidlinux/|South and Central America|M. do Paranapanema, Brazil|2"
 		[mirror.sjtu.edu.cn]="https://mirror.sjtu.edu.cn/voidlinux/|Asia|Shanghai, China|2"
 		[mirror.clarkson.edu]="https://mirror.clarkson.edu/voidlinux/|North America/|New York, USA|2"
 		[void.webconverger.org]="https://void.webconverger.org/|Asia|Singapore|2"
@@ -3119,7 +3148,7 @@ sh_chooseMirror() {
 		while IFS='|' LC_ALL=C read -r -a fields; do
 			key="${fields[FLD_MIRROR]}"
 			[[ "${AConfMirror[_MIRROR]}" = "$key" ]] && Aflag["$key"]='on' || Aflag["$key"]='off'
-			array+=("$key" "$(printf "$sep%-6s$sep%-25s$sep%-23s$sep%-s" \
+			array+=("$key" "$(printf "$sep%-6s$sep%-25s$sep%-26s$sep%-s" \
 				"Tier ${fields[FLD_TIER]}" \
 				"${fields[FLD_REGION]}" \
 				"${fields[FLD_LOCATION]}" \
@@ -3168,8 +3197,8 @@ sh_chooseMirror() {
 			;;
 		esac
 		AConfMirror[_MIRROR]="$mirror"
-		url_mirror="$(sh_splitarray "${Amirror[$mirror]}" "$FLD_REPOSITORY")"
-		AConfMirror[url_mirror]="$(sh_splitarray "${Amirror[$mirror]}" "$FLD_REPOSITORY")"
+        url_mirror="$(sh_splitarray "${Amirror[$mirror]}" "$FLD_REPOSITORY")"
+		AConfMirror[url_mirror]="$url_mirror"
 		AConfMirror[location]="$(sh_splitarray "${Amirror[$mirror]}" "$FLD_LOCATION")"
 		LMIRROR=true
 
@@ -4429,6 +4458,15 @@ sh_copy_keys() {
 
 }
 
+sh_configure_rootfs() {
+    XBPS_REPOSITORY="$XBPS_REPOSITORY ""\
+    --repository=${url_mirror}/current""\
+    --repository=${url_mirror}/current--repository=https://home.chililinux.com/voidlinux/extra""\
+    --repository=--repository=${url_mirror}/current/nonfree""\
+    --repository=${url_mirror}/current/multilib""\
+    --repository=${url_mirror}/current/multilib/nonfree"
+}
+
 sh_install_prereqs() {
 	#	REQUIRED_PKGS="base-files xbps libgcc dash coreutils sed tar gawk grub-i386-efi grub-x86_64-efi binutils device-mapper dhclient dracut-network openresolv"
 	#	REQUIRED_PKGS="base-container-full xbps libgcc dash coreutils sed tar gawk grub-i386-efi grub-x86_64-efi binutils device-mapper dhclient dracut-network openresolv"
@@ -4457,7 +4495,7 @@ sh_install_pkgs_in_chroot() {
 
 	sh_chroot_job "$msg -> $dir_install" \
 		"LC_ALL=C ${XBPS_INSTALL_UNPACK_ONLY} $pkgs" \
-		"$err_not_fatal" \
+		"$err_fatal" \
 		"$err_not_fatal"
 }
 
@@ -4700,6 +4738,7 @@ sh_install() {
 				sh_install_pkgs_in_chroot "$(gettext 'Atualizando Pacotes Base')" "${abase[*]}"
 				#  			sh_install_pkgs_in_chroot "$(gettext 'Instalando Wifi Firmware')" "${afirmware[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Daemons')" "${aDaemons[*]}"
+				sh_install_pkgs_in_chroot "$(gettext 'Instalando Editores Texto Gráfico ')" "${aEditorX[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Editores texto')" "${aEditorTxt[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Downloaders')" "${aDownloader[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Utilitário')" "${aUtility[*]}"
@@ -5369,6 +5408,7 @@ sh_main_menu() {
 			DEFITEM="${cmsg_Mirror}"
 		fi
 
+        ccabec="${baseccabec} - ${RED}${url_mirror}"
 		$LMIRROR && MENU_MIRROR="${YELLOW}[${AConfMirror[_MIRROR]}]${RST} ● " || MENU_MIRROR="${RED}[not defined]${RST} ● "
 		$LSOURCE && MENU_SOURCE="${YELLOW}[${AConfMirror[_SOURCE]}]${RST} ● " || MENU_SOURCE="${RED}[not defined]${RST} ● "
 		$LDISK && MENU_DEVICE="${YELLOW}[${AConfDisk[_DEVICE]}]${RST} ● " || MENU_DEVICE="${RED}[not defined]${RST} ● "
@@ -5427,7 +5467,7 @@ sh_main_menu() {
 		fi
 
 		case "$menu" in
-		"${cmsg_Mirror}") sh_chooseMirror "$@" && [ -n "$LMIRROR" ] && DEFITEM="${cmsg_Source}" ;;
+		"${cmsg_Mirror}") sh_choose_mirror "$@" && [ -n "$LMIRROR" ] && DEFITEM="${cmsg_Source}" ;;
 		"${cmsg_Source}") sh_chooseSource && [ -n "$LSOURCE" ] && DEFITEM="${cmsg_Disco}" ;;
 		"${cmsg_Disco}") sh_chooseDisk && [ -n "$LDISK" ] && DEFITEM="${cmsg_BootLoader}" ;;
 		"${cmsg_BootLoader}") sh_setBootLoader && [ -n "$LGRUB" ] && DEFITEM="FileSystem" ;;
@@ -6018,7 +6058,7 @@ sh_setLanguage() {
 	cmsg_Mirror=$(gettext "Espelho")
 	cmsg_BootLoader=$(gettext "Bootloader (GRUB)")
 	cmsg_FileSystem=$(gettext "Sistema de Arquivos")
-	cmsg_Disco=$(gettext "Disco")
+	cmsg_Disco=$(gettext "Armazenamento")
 	cmsg_Teclado=$(gettext "Teclado")
 	cmsg_SairSemInstalar=$(gettext "Sair sem instalar")
 	cmsg_tty=$(gettext "Somente terminal, sem interface gráfica")
