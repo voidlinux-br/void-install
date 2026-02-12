@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: qua 11 fev 2026 00:42:27 -04
+#  Updated: qui 12 fev 2026 05:15:44 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.2.11-20260211'
+readonly _VERSION_='3.2.12-20260212'
 readonly DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr chroot blkid fdisk parted lsblk curl xz mkfs.vfat tee lvm cryptsetup gettext)
 readonly LOCKFILE="/tmp/void-install.lock"
 
@@ -105,7 +105,8 @@ declare LINSTALL=false
 declare HYPRLAND=false
 declare LVM=false
 declare LFDE=false
-declare LONLY_TTY=true
+declare LONLY_TTY=false
+declare LAUDIO=false
 declare LSERVER=false
 declare LEXTRA=false
 declare LLOCALE=true
@@ -531,74 +532,73 @@ sh_choose_common_packages() {
 	declare -ga aVideo=(mesa-dri linux-firmware-intel xf86-video-amdgpu xf86-video-ati mesa-nouveau-dri)
 	declare -ga aPulseaudio=(pulseaudio pavucontrol pasystray gst-plugins-bad1 gst-plugins-good1 gst-plugins-ugly1 gst-plugins-base1 alsa-plugins-pulseaudio)
 	declare -ga aPipewire=(pipewire wireplumber alsa-pipewire pulseaudio-utils pavucontrol libspa-bluetooth libjack-pipewire alsa-plugins-pulseaudio)
+    declare -ga aDisplaymanager=()
+    declare -ga aDisplaymanagerConfig=()
+    declare -a custom=()
 
-	case $_DISPLAYMANAGER in
-	lxdm)
-		declare -ga aDisplaymanager=(lxdm)
-		declare -ga aDisplaymanagerConfig=(lxdm-theme-vdojo)
-		;;
-	sddm)
-		declare -ga aDisplaymanager=(sddm)
-		declare -ga aDisplaymanagerConfig=(voidbr-sddm-themes)
-		;;
-	gdm)
-		declare -ga aDisplaymanager=(gdm)
-		declare -ga aDisplaymanagerConfig=()
-		;;
-	lightdm)
-		declare -ga aDisplaymanager=(lightdm lightdm-gtk-greeter lightdm-gtk-greeter-settings arc-theme papirus-icon-theme dejavu-fonts-ttf)
-		declare -ga aDisplaymanagerConfig=(voidbr-lightdm-themes)
-		;;
-	*)
-		declare -ga aDisplaymanager=()
-		declare -ga aDisplaymanagerConfig=()
-		;;
-	esac
+    case $_DISPLAYMANAGER in
+      lxdm)
+        aDisplaymanager=(lxdm)
+        custom=(lxdm-theme-vdojo)
+        ;;
+
+      sddm)
+        aDisplaymanager=(sddm)
+        custom=(voidbr-sddm-themes)
+        ;;
+
+      gdm)
+        aDisplaymanager=(gdm)
+        ;;
+
+      lightdm)
+        aDisplaymanager=(
+          lightdm
+          lightdm-gtk-greeter
+          lightdm-gtk-greeter-settings
+          arc-theme
+          papirus-icon-theme
+          dejavu-fonts-ttf
+        )
+        custom=(voidbr-lightdm-themes)
+        ;;
+
+      *)
+        aDisplaymanager=()
+        custom=()
+        ;;
+    esac
+
+    # aplica config custom somente se LCUSTOM for true
+    if $LCUSTOM && ((${#custom[@]})); then
+      aDisplaymanagerConfig=("${custom[@]}")
+    fi
 
 	if $LCUSTOM; then
-		## X11
-		declare -ga aIconsAndThemes=()
-		declare -ga aArchiverX=(xarchiver)
-		declare -ga aBrowser=(brave-bin)
-		declare -ga aBluetooth=(bluez bluez-alsa bluedevil blueman bluez-cups bluez-deprecated gnome-bluetooth1 blueberry)
-		declare -ga aFont+=(liberation-fonts-ttf dejavu-fonts-ttf fonts-droid-ttf fonts-croscore-ttf
-			terminus-font ttf-ubuntu-font-family font-iosevka
-			unicode-emoji noto-fonts-emoji font-emoji-one-color unicode-emoji
-			nerd-fonts-symbols-ttf font-hack-ttf
-			font-awesome font-awesome5 font-awesome6 nerd-fonts-ttf
-		)
-		declare -ga aPerfumery=(conky setxkbmap numlockx nitrogen ristretto mate-notification-daemon)
-		declare -ga aPrinter=(cups system-config-printer system-config-printer-udev splix samsung-unified-driver brother-brlaser cups-pdf)
-		declare -ga aFilemanager=()
-		declare -ga aTerminal=(rxvt-unicode cool-retro-term)
-		declare -ga aEditorX=(kate mousepad libreoffice libreoffice-i18n-$(sh_get_language_without_utf8))
-		declare -ga aNetworkX=(gvfs gvfs-smb gvfs-mtp gvfs-afc gvfs-cdda udisks2)
-		declare -ga aUtilityX=(mate-calc xkill menulibre mugshot ocs-url gparted vlc celluloid)
-		## tty
-		declare -ga aDaemons=(acpi acpid irqbalance avahi avahi-discover)
-		declare -ga aArchiverTty=(unrar zip p7zip unzip bzip2)
-		declare -ga aDownloader=()
-		declare -ga aUtility=(binutils dfc btop parallel bubblewrap cmatrix pfetch bc bat xtools geoip geoipupdate)
-		declare -ga aEditorTxt=()
-	else
 		## X11
 		declare -ga aIconsAndThemes=()
 		declare -ga aArchiverX=()
 		declare -ga aBrowser=()
 		declare -ga aFilemanager=()
-		declare -ga aBluetooth=()
+		declare -ga aBluetooth=(bluez bluez-alsa bluedevil blueman bluez-cups bluez-deprecated gnome-bluetooth1 blueberry)
 		declare -ga aFont=(noto-fonts-emoji)
 		declare -ga aPerfumery=()
 		declare -ga aPrinter=()
-		declare -ga aTerminal=()
+		declare -ga aTerminal=(rxvt-unicode cool-retro-term)
 		declare -ga aEditorX=(mousepad libreoffice libreoffice-i18n-$(sh_get_language_without_utf8))
-		declare -ga aNetworkX=()
-		declare -ga aUtilityX=(vlc celluloid)
+		declare -ga aNetworkX=(gvfs gvfs-smb gvfs-mtp gvfs-afc gvfs-cdda udisks2)
+		declare -ga aUtilityX=(xkill menulibre mugshot ocs-url gparted vlc celluloid)
 		## tty
-		declare -ga aDaemons=()
-		declare -ga aArchiverTty=()
+		declare -ga aDaemons=(acpi acpid irqbalance avahi avahi-discover)
+		declare -ga aArchiverTty=(unrar zip p7zip unzip bzip2)
 		declare -ga aDownloader=()
-		declare -ga aUtility=()
+		declare -ga aUtility=(binutils dfc btop parallel bubblewrap cmatrix pfetch bc bat xtools geoip geoipupdate)
+	else
+	    declare -ga aIconsAndThemes=()
+	    declare -ga aTerminal=()
+	    declare -ga aBrowser=()
+	    declare -ga aFilemanager=()
+	    declare -ga aUtilityX=()
 	fi
 	aIconsAndThemes+=(Adapta adwaita-icon-theme)
 	aTerminal+=(xfce4-terminal)
@@ -2071,15 +2071,91 @@ sh_activating_services() {
 	fi
 }
 
+sh_global_audio_cleaning() {
+    local cuser="${AsUser[cuser]}"
+    # LIMPEZA GLOBAL — remover qualquer autostart do sistema
+    # (evita conflito com configuração do usuário)
+    sh_chroot_job "${cmsg_Ajustando} sound global" "
+        # remover PipeWire global
+        sudo rm -f /etc/xdg/autostart/pipewire.desktop
+        sudo rm -f /etc/xdg/autostart/pipewire-pulse.desktop
+        sudo rm -f /etc/xdg/autostart/wireplumber.desktop
+
+        # remover PulseAudio global
+        sudo rm -f /etc/xdg/autostart/pulseaudio.desktop
+        sudo rm -f /etc/xdg/autostart/pulseaudio-kde.desktop
+
+        # remover qualquer config ALSA global que redirecione áudio
+        sudo rm -f /etc/alsa/conf.d/50-pipewire.conf
+        sudo rm -f /etc/alsa/conf.d/99-pipewire-default.conf
+        sudo rm -f /etc/alsa/conf.d/50-pulseaudio.conf
+
+        # LIMPEZA DO USUÁRIO
+        rm -f /home/$cuser/.config/autostart/pipewire.desktop
+        rm -f /home/$cuser/.config/autostart/pipewire-pulse.desktop
+        rm -f /home/$cuser/.config/autostart/wireplumber.desktop
+        rm -f /home/$cuser/.config/autostart/pulseaudio.desktop
+        rm -f /home/$cuser/.config/autostart/pulseaudio-kde.desktop
+
+        rm -rf /home/$cuser/.config/pipewire
+        rm -rf /home/$cuser/.config/wireplumber
+        rm -rf /home/$cuser/.config/pulse
+
+    " $err_not_fatal
+}
+
 sh_activating_pipewire() {
-	sh_chroot_job "${cmsg_Ajustando} pipewire" "
-     mkdir -p /etc/alsa/conf.d
-     ln -sf /usr/share/alsa/alsa.conf.d/{50-pipewire.conf,99-pipewire-default.conf} /etc/alsa/conf.d/
-     mkdir -p /etc/pipewire/pipewire.conf.d
-     ln -sf /usr/share/examples/{wireplumber/10-wireplumber.conf,pipewire/20-pipewire-pulse.conf} /etc/pipewire/pipewire.conf.d/
-     mkdir -p /etc/xdg/autostart
-     ln -sf /usr/share/applications/{pipewire.desktop,pipewire-pulse.desktop,wireplumber.desktop} /etc/xdg/autostart/
-   " $err_not_fatal
+  local cuser="${AsUser[cuser]}"
+
+    sh_global_audio_cleaning
+    sh_chroot_job "${cmsg_Ajustando} Pipewire (user autostart)" "
+
+   # DESATIVAR AUTOSPAWN DO PULSEAUDIO (usuário)
+   # impede PulseAudio iniciar automaticamente
+   mkdir -p /home/$cuser/.config/pulse
+
+   cat > /home/$cuser/.config/pulse/client.conf <<EOF
+autospawn = no
+daemon-binary = /bin/true
+EOF
+
+    #AUTOSTART CORRETO (SÓ USUÁRIO)
+    mkdir -p /home/$cuser/.config/autostart
+    ln -sf /usr/share/applications/pipewire.desktop /home/$cuser/.config/autostart/pipewire.desktop
+    ln -sf /usr/share/applications/pipewire-pulse.desktop /home/$cuser/.config/autostart/pipewire-pulse.desktop
+    ln -sf /usr/share/applications/wireplumber.desktop /home/$cuser/.config/autostart/wireplumber.desktop
+
+    # ---- integração ALSA → PipeWire ----
+    mkdir -p ~/.config/alsa/conf.d
+    ln -sf /usr/share/alsa/alsa.conf.d/50-pipewire.conf /home/$cuser/.config/alsa/conf.d/50-pipewire.conf
+    ln -sf /usr/share/alsa/alsa.conf.d/99-pipewire-default.conf /home/$cuser/.config/alsa/conf.d/99-pipewire-default.conf
+
+  " $err_not_fatal
+}
+
+sh_activating_pulseaudio() {
+    local cuser="${AsUser[cuser]}"
+
+    sh_global_audio_cleaning
+    sh_chroot_job "${cmsg_Ajustando} PulseAudio (user autostart)" "
+
+    #AUTOSTART CORRETO (SÓ USUÁRIO)
+    mkdir -p /home/$cuser/.config/autostart
+    # ---- autostart do PulseAudio ----
+    cat > ~/.config/autostart/pulseaudio.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Exec=pulseaudio --start
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Name=PulseAudio
+EOF
+
+    # ---- integração ALSA → PulseAudio ----
+    ln -sf /usr/share/alsa/alsa.conf.d/50-pulseaudio.conf /home/$cuser/.config/alsa/conf.d/50-pulseaudio.conf
+
+    " $err_not_fatal
 }
 
 sh_mk_working_dir() {
@@ -2874,7 +2950,7 @@ sh_choosefstype() {
 	return 0
 }
 
-sh_chooseaudioserver() {
+sh_choose_audioserver() {
 	local exit_status
 	local array=()
 	local x
@@ -3978,9 +4054,11 @@ sh_choose_wm() {
 		esac
 	done
 	if $ok; then
+		LONLY_TTY=true
 		AConfAudio[_AUDIOSERVER]="None"
 		_DISPLAYMANAGER="None"
 	else
+		LONLY_TTY=false
 		AConfAudio[_AUDIOSERVER]="Pipewire"
 	    if grep -qi gnome <<<"${_WINDOWMANAGER[@]}"; then
     		_DISPLAYMANAGER="gdm"
@@ -4809,6 +4887,8 @@ sh_install() {
 
 			if [[ "${AConfAudio[_AUDIOSERVER]}" == 'Pipewire' ]]; then
 				sh_activating_pipewire
+			elif [[ "${AConfAudio[_AUDIOSERVER]}" == 'Pulseaudio' ]]; then
+			    sh_activating_pulseaudio
 			fi
 
 			case $_DISPLAYMANAGER in
@@ -5477,7 +5557,7 @@ sh_main_menu() {
 		"Locale") sh_chooseLocale && [ -n "$LTIMEZONE" ] && DEFITEM="Wm" ;;
 		"Wm") sh_choose_wm && [ -n "$LWM" ] && DEFITEM="Dm" ;;
 		"Dm") sh_choose_dm && [ -n "$LDM" ] && DEFITEM="Audio" ;;
-		"Audio") sh_chooseaudioserver "$@" && [ -n "$LAUDIO" ] && DEFITEM="${cmsg_Usuario}" ;;
+		"Audio") sh_choose_audioserver "$@" && [ -n "$LAUDIO" ] && DEFITEM="${cmsg_Usuario}" ;;
 		"${cmsg_Usuario}") sh_confadduser "$@" && [ -n "$LEXTRA" ] && DEFITEM="${cmsg_Instalar}" ;;
 		"${cmsg_Instalar}") sh_install ;;
 		'↑↓') : ;;
