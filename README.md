@@ -45,15 +45,27 @@ Run `void-install` without any arguments to get help.
 
 Run `void-install -i` to start the installer and choose language.
 
-<img alt="void-install-choose-language" src="assets/void-install-choose-language.jpg" width="600" />
-<img alt="void-install-main-menu" src="assets/void-install-main-menu.jpg" width="600" />
-<img alt="void-install-choose-mirror" src="assets/void-install-choose-mirror.jpg" width="600" />
-<img alt="void-install-choose-source" src="assets/void-install-choose-source.jpg" width="600" />
-<img alt="void-install-choose-disk" src="assets/void-install-choose-disk.jpg" width="600" />
-<img alt="void-install-choose-filesystem" src="assets/void-install-choose-filesystem.jpg" width="600" />
-<img alt="void-install-choose-timezone" src="assets/void-install-choose-timezone.jpg" width="600" />
-<img alt="void-install-choose-wm" src="assets/void-install-choose-wm.jpg" width="600" />
-<img alt="void-install-choose-extra" src="assets/void-install-choose-extra.jpg" width="600" />
-<img alt="void-install-choose-fde" src="assets/void-install-choose-fde.jpg" width="600" />
-<img alt="void-install-clear-vg" src="assets/void-install-clear-vg.jpg" width="600" />
-<img alt="void-install-choose-wifi" src="assets/void-install-choose-wifi.jpg" width="600" />
+<img alt="01" src="assets/01.png" width="600" />
+<img alt="02" src="assets/02.png" width="600" />
+<img alt="03" src="assets/03.png" width="600" />
+<img alt="04" src="assets/04.png" width="600" />
+<img alt="05" src="assets/05.png" width="600" />
+<img alt="06" src="assets/06.png" width="600" />
+<img alt="07" src="assets/07.png" width="600" />
+<img alt="08" src="assets/08.png" width="600" />
+<img alt="09" src="assets/09.png" width="600" />
+<img alt="10" src="assets/10.png" width="600" />
+<img alt="11" src="assets/11.png" width="600" />
+<img alt="12" src="assets/12.png" width="600" />
+<img alt="13" src="assets/13.png" width="600" />
+<img alt="14" src="assets/14.png" width="600" />
+<img alt="15" src="assets/15.png" width="600" />
+<img alt="16" src="assets/16.png" width="600" />
+<img alt="17" src="assets/17.png" width="600" />
+<img alt="18" src="assets/18.png" width="600" />
+<img alt="19" src="assets/19.png" width="600" />
+<img alt="20" src="assets/20.png" width="600" />
+<img alt="21" src="assets/21.png" width="600" />
+<img alt="22" src="assets/22.png" width="600" />
+<img alt="23" src="assets/23.png" width="600" />
+<img alt="24" src="assets/24.png" width="600" />
