@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: qui 12 fev 2026 05:15:44 -04
+#  Updated: qui 12 fev 2026 12:18:49 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -521,6 +521,7 @@ sh_choose_common_packages() {
 		micro
 		xz
 		zstd
+		inxi
 	)
 
 	if $LXORG; then
@@ -530,8 +531,8 @@ sh_choose_common_packages() {
 	## begin packages
 	declare -ga aXorg=(xorg xinit xterm xorg-fonts dbus-x11 elogind dbus-elogind polkit-elogind xdg-user-dirs xrdb)
 	declare -ga aVideo=(mesa-dri linux-firmware-intel xf86-video-amdgpu xf86-video-ati mesa-nouveau-dri)
-	declare -ga aPulseaudio=(pulseaudio pavucontrol pasystray gst-plugins-bad1 gst-plugins-good1 gst-plugins-ugly1 gst-plugins-base1 alsa-plugins-pulseaudio)
-	declare -ga aPipewire=(pipewire wireplumber alsa-pipewire pulseaudio-utils pavucontrol libspa-bluetooth libjack-pipewire alsa-plugins-pulseaudio)
+	declare -ga aPulseaudio=(pulseaudio pavucontrol pasystray gst-plugins-bad1 gst-plugins-good1 gst-plugins-ugly1 gst-plugins-base1 alsa-plugins-pulseaudio alsa-utils)
+	declare -ga aPipewire=(pipewire wireplumber alsa-pipewire pulseaudio-utils pavucontrol libspa-bluetooth libjack-pipewire alsa-plugins-pulseaudio alsa-utils)
     declare -ga aDisplaymanager=()
     declare -ga aDisplaymanagerConfig=()
     declare -a custom=()
@@ -587,7 +588,7 @@ sh_choose_common_packages() {
 		declare -ga aTerminal=(rxvt-unicode cool-retro-term)
 		declare -ga aEditorX=(mousepad libreoffice libreoffice-i18n-$(sh_get_language_without_utf8))
 		declare -ga aNetworkX=(gvfs gvfs-smb gvfs-mtp gvfs-afc gvfs-cdda udisks2)
-		declare -ga aUtilityX=(xkill menulibre mugshot ocs-url gparted vlc celluloid)
+		declare -ga aUtilityX=(xkill menulibre mugshot ocs-url gparted vlc celluloid lm_sensors)
 		## tty
 		declare -ga aDaemons=(acpi acpid irqbalance avahi avahi-discover)
 		declare -ga aArchiverTty=(unrar zip p7zip unzip bzip2)
@@ -2035,7 +2036,7 @@ sh_make_fstab() {
 }
 
 sh_activating_services() {
-	local aServicesTTY=(dbus dhcpcd sshd chronyd udevd wpa_supplicant uuidd dmeventd)
+	local aServicesTTY=(dbus dhcpcd sshd chronyd udevd wpa_supplicant uuidd dmeventd acpid)
 	local aServicesX=(elogind polkitd bluetoothd)
 	local service
 	local level=2
@@ -2273,13 +2274,10 @@ sh_X11_minimal() {
 	apkgs+=("${aIconsAndThemes[@]}")
 
 	if $LAUDIO; then
-		if [[ "${AConfAudio[_AUDIOSERVER]}" == 'Pulseaudio' ]]; then
-			apkgs+=("${aPulseaudio[@]}")
-			aMedia+=("${aPulseaudio[@]}")
-		else
-			apkgs+=("${aPipewire[@]}")
-			aMedia+=("${aPipewire[@]}")
-		fi
+		apkgs+=("${aPulseaudio[@]}")
+		apkgs+=("${aPipewire[@]}")
+		aMedia+=("${aPulseaudio[@]}")
+		aMedia+=("${aPipewire[@]}")
 	fi
 
 	apkgs+=("${aPrinter[@]}")
@@ -2348,6 +2346,15 @@ sh_plasma_minimal() {
         voidbr-professional-theme
         voidbr-beauty-icons
     )
+
+    if $LCUSTOM; then
+        apkgs+=(
+            kaccounts-integration
+            kaccounts-providers
+            kaccounts-integration-qt5
+            signon-kwallet-extension
+        )
+    fi
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
