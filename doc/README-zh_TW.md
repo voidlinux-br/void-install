@@ -1,6 +1,6 @@
-# 
-## Herunterladen:
-- 0 – mit Distribution VOID
+# void-install - VOID Linux 巴西安裝程序
+## 下載：
+- 0 - 使用發行版 VOID
 ```bash
 {
   echo 'repository=https://repo-fastly.voidlinux.org/current'
@@ -12,38 +12,38 @@ sudo xbps-install -Syf void-install
 sudo void-install
 ```
 
-- 1 – Git verwenden
-	- git clone --length=1 https://github.com/voidlinuxbr/void-install
+- 1 - 使用git
+	- git克隆--深度= 1 https://github.com/voidlinuxbr/void-install
 
-- 2 – mit Curl/Wget stdin
+- 2 - 使用curl/wget stdin
 	- bash <(curl -s -L https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh)
 	- bash <(wget -q -O - https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh)
-	- curl -s -O https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh | bash
-	- wget -q -O - https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh | bash
+	- 捲曲-s -O https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh |巴什
+	- wget -q -O - https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh | wget -q -O - https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh |巴什
 
-- 3 – mit Curl/Wget
-	- curl -O https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh
+- 3 - 使用curl/wget
+	- 捲曲-O https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh
 	- wget https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh
 	- chmod +x install.sh
-	- bash install.sh
+	- bash安裝.sh
 
-## Installation (nach dem Download):
-- 1 – mit make
-	- sudo make install
+## 安裝（下載後）：
+- 1 - 使用make
+	- 須藤進行安裝
 
-- 2 – läuft im lokalen Repo
-	- ./void-install
+- 2 - 在本機儲存庫中運行
+	- ./void-安裝
 
-Beispiele
---------
+範例
+---------
 
-Führen Sie „void-install“ ohne Argumente aus, um Hilfe zu erhalten.
+運行不帶任何參數的“void-install”來獲取幫助。
 
 <img alt="void-install-help" src="assets/void-install-help.jpg" width="600" />
 
-**Hinweis:** Für die tatsächliche Ausführung des Installationsprogramms sind „sudo“ oder erweiterte Berechtigungen erforderlich.
+**注意：** 實際執行安裝程式需要 `sudo` 或升級權限。
 
-Führen Sie „void-install -i“ aus, um das Installationsprogramm zu starten und die Sprache auszuwählen.
+
 
 <img alt="01" src="assets/01.png" width="600" />
 <img alt="02" src="assets/02.png" width="600" />
