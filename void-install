@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: sex 13 fev 2026 18:37:39 -04
+#  Updated: sáb 14 fev 2026 03:35:00 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.2.13-20260213'
+readonly _VERSION_='3.2.14-20260214'
 readonly DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr chroot blkid fdisk parted lsblk curl xz mkfs.vfat tee lvm cryptsetup gettext)
 readonly LOCKFILE="/tmp/void-install.lock"
 
@@ -108,6 +108,7 @@ declare LFDE=false
 declare LONLY_TTY=false
 declare LAUDIO=false
 declare LSERVER=false
+declare LDHCP=false
 declare LEXTRA=false
 declare LLOCALE=true
 declare LXORG=false
@@ -160,9 +161,9 @@ declare -gA AConfLocale=(
 )
 declare -gA AConfMirror=(
 	[_SOURCE]='network'
-#	[_MIRROR]='repo.fastly.voidlinux.org'
-#	[url_mirror]='https://repo-fastly.voidlinux.org'
-#	[location]='Fastly Global CDN'
+	#	[_MIRROR]='repo.fastly.voidlinux.org'
+	#	[url_mirror]='https://repo-fastly.voidlinux.org'
+	#	[location]='Fastly Global CDN'
 	[_MIRROR]='void.voidbr.org'
 	[url_mirror]='https://void.voidbr.org/voidlinux/'
 	[location]='M. do Paranapanema, Brazil'
@@ -190,6 +191,15 @@ declare -gA Alocale=(
 	[4]=es_ES
 	[5]=it_IT
 )
+declare -gA AsDhcp=(
+	AsDhcp [IFACE]="${Asdhcp[IFACE]:-eth0}"
+	AsDhcp [IP]="${AsDhcp[IP]:-192.168.1.100}"
+	AsDhcp [CIDR]="${AsDhcp[CIDR]:-24}"
+	AsDhcp [GATEWAY]="${AsDhcp[GATEWAY]:-192.168.1.1}"
+	AsDhcp [DNS1]="${AsDhcp[DNS1]:-1.1.1.1}"
+	AsDhcp [DNS2]="${AsDhcp[DNS2]:-8.8.8.8}"
+)
+
 declare dialogRcFile="$HOME/.dialogrc"
 #
 declare _DISPLAYMANAGER='None'
@@ -478,139 +488,145 @@ sh_update_self() {
 }
 
 sh_choose_common_packages() {
-	declare -ga aMicrocode=(
-		intel-ucode
-		linux-firmware-amd
-	)
-	declare -ga aSuplemento=(
-		voidbr-grub-theme
-		#	   voidbr-plymouth-theme
-		chili-utils
-		void-utils
-		voidbr-nano-config
-		voidbr-vinstall
-	)
-	declare -ga aExtra=(
-		bash-completion
-		fzf
-		gettext
-		dialog
-		pv
-		tree
-		duf
-		parted
-		rsync
-		tmate
-		inetutils
-		iputils
-		net-tools
-		cifs-utils
-		ntfs-3g
-		htop
-		parallel
-		exa
-		nvme-cli
-		fastfetch
-		sed
-		grep
-		curl
-		wget
-		git
-		nano
-		vim
-		micro
-		xz
-		zstd
-		inxi
-	)
+	if $LCUSTOM; then
+		declare -ga aMicrocode=(
+			intel-ucode
+			linux-firmware-amd
+		)
+
+		declare -ga aSuplemento=(
+			chili-utils
+			void-utils
+			voidbr-nano-config
+			voidbr-vinstall
+		)
+
+		declare -ga aExtra=(
+			bash-completion
+			fzf
+			dialog
+			pv
+			tree
+			duf
+			parted
+			rsync
+			tmate
+			inetutils
+			iputils
+			net-tools
+			cifs-utils
+			ntfs-3g
+			htop
+			parallel
+			exa
+			nvme-cli
+			fastfetch
+			curl
+			wget
+			git
+			nano
+			vim
+			micro
+			inxi
+		)
+	fi
 
 	if $LXORG; then
 		return
 	fi
 
+	#	debug $LONLY_TTY
+
 	## begin packages
-	declare -ga aXorg=(xorg xinit xterm xorg-fonts dbus-x11 elogind dbus-elogind polkit-elogind xdg-user-dirs xrdb)
-	declare -ga aVideo=(mesa-dri linux-firmware-intel xf86-video-amdgpu xf86-video-ati mesa-nouveau-dri)
-	declare -ga aPulseaudio=(pulseaudio pavucontrol pasystray gst-plugins-bad1 gst-plugins-good1 gst-plugins-ugly1 gst-plugins-base1 alsa-plugins-pulseaudio alsa-utils)
-	declare -ga aPipewire=(pipewire wireplumber alsa-pipewire pulseaudio-utils pavucontrol libspa-bluetooth libjack-pipewire alsa-plugins-pulseaudio alsa-utils)
-    declare -ga aDisplaymanager=()
-    declare -ga aDisplaymanagerConfig=()
-    declare -a custom=()
+	if ! $LONLY_TTY; then
+		declare -ga aXorg=(xorg xinit xterm xorg-fonts dbus-x11 elogind dbus-elogind polkit-elogind xdg-user-dirs xrdb)
+		declare -ga aVideo=(mesa-dri linux-firmware-intel xf86-video-amdgpu xf86-video-ati mesa-nouveau-dri)
+		declare -ga aPulseaudio=(pulseaudio pavucontrol pasystray gst-plugins-bad1 gst-plugins-good1 gst-plugins-ugly1 gst-plugins-base1 alsa-plugins-pulseaudio alsa-utils)
+		declare -ga aPipewire=(pipewire wireplumber alsa-pipewire pulseaudio-utils pavucontrol libspa-bluetooth libjack-pipewire alsa-plugins-pulseaudio alsa-utils)
+		declare -ga aDisplaymanager=()
+		declare -ga aDisplaymanagerConfig=()
+		declare -a custom=()
 
-    case $_DISPLAYMANAGER in
-      lxdm)
-        aDisplaymanager=(lxdm)
-        custom=(lxdm-theme-vdojo)
-        ;;
+		case $_DISPLAYMANAGER in
+		lxdm)
+			aDisplaymanager=(lxdm)
+			custom=(lxdm-theme-vdojo)
+			;;
 
-      sddm)
-        aDisplaymanager=(sddm)
-        custom=(voidbr-sddm-themes)
-        ;;
+		sddm)
+			aDisplaymanager=(sddm)
+			custom=(voidbr-sddm-themes)
+			;;
 
-      gdm)
-        aDisplaymanager=(gdm)
-        ;;
+		gdm)
+			aDisplaymanager=(gdm)
+			;;
 
-      lightdm)
-        aDisplaymanager=(
-          lightdm
-          lightdm-gtk-greeter
-          lightdm-gtk-greeter-settings
-          arc-theme
-          papirus-icon-theme
-          dejavu-fonts-ttf
-        )
-        custom=(voidbr-lightdm-themes)
-        ;;
+		lightdm)
+			aDisplaymanager=(
+				lightdm
+				lightdm-gtk-greeter
+				lightdm-gtk-greeter-settings
+				arc-theme
+				papirus-icon-theme
+				dejavu-fonts-ttf
+			)
+			custom=(voidbr-lightdm-themes)
+			;;
 
-      *)
-        aDisplaymanager=()
-        custom=()
-        ;;
-    esac
+		*)
+			aDisplaymanager=()
+			custom=()
+			;;
+		esac
 
-    # aplica config custom somente se LCUSTOM for true
-    if $LCUSTOM && ((${#custom[@]})); then
-      aDisplaymanagerConfig=("${custom[@]}")
-    fi
+		# aplica config custom somente se LCUSTOM for true
+		if $LCUSTOM && ((${#custom[@]})); then
+			aDisplaymanagerConfig=("${custom[@]}")
+		fi
 
-	if $LCUSTOM; then
-		## X11
-		declare -ga aIconsAndThemes=()
-		declare -ga aArchiverX=()
-		declare -ga aBrowser=()
-		declare -ga aFilemanager=()
-		declare -ga aBluetooth=(bluez bluez-alsa bluedevil blueman bluez-cups bluez-deprecated gnome-bluetooth1 blueberry)
-		declare -ga aFont=(noto-fonts-emoji)
-		declare -ga aPerfumery=()
-		declare -ga aPrinter=()
-		declare -ga aTerminal=(rxvt-unicode cool-retro-term)
-		declare -ga aEditorX=(mousepad libreoffice libreoffice-i18n-$(sh_get_language_without_utf8))
-		declare -ga aNetworkX=(gvfs gvfs-smb gvfs-mtp gvfs-afc gvfs-cdda udisks2)
-		declare -ga aUtilityX=(xkill menulibre mugshot ocs-url gparted vlc celluloid lm_sensors)
-		## tty
-		declare -ga aDaemons=(acpi acpid irqbalance avahi avahi-discover)
-		declare -ga aArchiverTty=(unrar zip p7zip unzip bzip2)
-		declare -ga aDownloader=()
-		declare -ga aUtility=(binutils dfc btop parallel bubblewrap cmatrix pfetch bc bat xtools geoip geoipupdate)
-	else
-	    declare -ga aIconsAndThemes=()
-	    declare -ga aTerminal=()
-	    declare -ga aBrowser=()
-	    declare -ga aFilemanager=()
-	    declare -ga aUtilityX=()
+		if $LCUSTOM; then
+			if ! $LONLY_TTY; then
+				## X11
+				declare -ga aIconsAndThemes=()
+				declare -ga aArchiverX=()
+				declare -ga aBrowser=()
+				declare -ga aFilemanager=()
+				declare -ga aBluetooth=(bluez bluez-alsa bluedevil blueman bluez-cups bluez-deprecated gnome-bluetooth1 blueberry)
+				declare -ga aFont=(noto-fonts-emoji)
+				declare -ga aPerfumery=()
+				declare -ga aPrinter=()
+				declare -ga aTerminal=(rxvt-unicode cool-retro-term)
+				declare -ga aEditorX=(mousepad libreoffice libreoffice-i18n-$(sh_get_language_without_utf8))
+				declare -ga aNetworkX=(gvfs gvfs-smb gvfs-mtp gvfs-afc gvfs-cdda udisks2)
+				declare -ga aUtilityX=(xkill menulibre mugshot ocs-url gparted vlc celluloid lm_sensors)
+				declare -ga aDaemons+=(avahi-discover)
+			fi
+			## tty
+			declare -ga aArchiverTty=(unrar zip p7zip unzip bzip2)
+			declare -ga aDownloader=()
+			declare -ga aUtility=(binutils dfc btop parallel bubblewrap cmatrix pfetch bc bat xtools geoip geoipupdate)
+		else
+			declare -ga aIconsAndThemes=()
+			declare -ga aTerminal=()
+			declare -ga aBrowser=()
+			declare -ga aFilemanager=()
+			declare -ga aUtilityX=()
+			declare -ga aDaemons=()
+		fi
+
+		aIconsAndThemes+=(Adapta adwaita-icon-theme)
+		aTerminal+=(xfce4-terminal)
+		aBrowser+=(firefox firefox-i18n-$(sh_get_language_without_utf8))
+		aFilemanager+=(octoxbps)
+		aUtilityX+=(chili-iso2usb)
+		aDaemons+=(avahi acpi acpid irqbalance)
+		aNetworkX=(network-manager-applet)
 	fi
-	aIconsAndThemes+=(Adapta adwaita-icon-theme)
-	aTerminal+=(xfce4-terminal)
-	aBrowser+=(firefox firefox-i18n-$(sh_get_language_without_utf8))
-	aFilemanager+=(octoxbps)
-	aUtilityX+=(chili-iso2usb)
 
 	if ! $LSERVER; then
 		aDaemons+=(NetworkManager)
 	fi
-	aNetworkX=(network-manager-applet)
 
 }
 
@@ -749,6 +765,7 @@ sh_touchConf() {
 		WIFI_PASSWORD=$_WIFI_PASSWORD
 	EOF
 	{
+		declare -p LDHCP
 		declare -p LDISK
 		declare -p LEFI
 		declare -p LAUDIO
@@ -761,6 +778,7 @@ sh_touchConf() {
 		declare -p _WINDOWMANAGER
 		declare -p AsUser
 		declare -p Amkfs
+		declare -p AsDhcp
 		declare -p Amntpoint
 		declare -p AmntpointFDE
 		declare -p AConfDisk
@@ -834,10 +852,10 @@ sh_get_lang() {
 export -f sh_get_lang
 
 sh_get_language_without_utf8() {
-#	local LangFilter="${LANG%%.*}"
+	#	local LangFilter="${LANG%%.*}"
 	local LangFilter="${AConfLocale[_LOCALE]%%.*}"
-    local LangFilterModified="${LangFilter//_/-}"
-    echo "$LangFilterModified"
+	local LangFilterModified="${LangFilter//_/-}"
+	echo "$LangFilterModified"
 }
 
 sh_get_code_language() {
@@ -875,7 +893,17 @@ sh_loadSavedConfig() {
 		die "${cmsg_falhaAbertura} $app_conf!"
 	fi
 	sh_setUser
+	sh_setAsDhcp
 	#debug $(declare -p LCUSTOM)
+}
+
+sh_setAsDhcp() {
+	AsDhcp[IFACE]=${AsDhcp[IFACE]:-$(get_default_iface)}
+	AsDhcp[IP]=${AsDhcp[IP]:-192.168.1.100}
+	AsDhcp[CIDR]=${AsDhcp[CIDR]:-24}
+	AsDhcp[GATEWAY]=${AsDhcp[GATEWAY]:-192.168.1.1}
+	AsDhcp[DNS1]=${AsDhcp[DNS1]:-1.1.1.1}
+	AsDhcp[DNS2]=${AsDhcp[DNS2]:-8.8.8.8}
 }
 
 sh_setUser() {
@@ -1540,7 +1568,7 @@ sh_mkparted() {
 }
 
 sh_update_mirror() {
-  sh_cmd_job "${cmsg_Configurando} ${cmsg_Mirror,,}" "
+	sh_cmd_job "${cmsg_Configurando} ${cmsg_Mirror,,}" "
     conf=\"${dir_install}/etc/xbps.d/00-repository-main.conf\"
 
     {
@@ -1964,7 +1992,7 @@ sh_make_fstab() {
 	if ! $LVM; then
 		sh_info_msg "${cmsg_Gerando} fstab pass1"
 		echo "tmpfs /tmp tmpfs defaults,nosuid,nodev,noatime,mode=1777 0 0" >"$dir_install/etc/fstab"
-#		echo "tmpfs /var/log tmpfs defaults,noatime,mode=0755 0 0" >>"$dir_install/etc/fstab"
+		#		echo "tmpfs /var/log tmpfs defaults,noatime,mode=0755 0 0" >>"$dir_install/etc/fstab"
 		echo "proc /proc proc nodev,noexec,nosuid 0 0" >>"$dir_install/etc/fstab"
 
 		for i in "${!Amntpoint[@]}"; do
@@ -2036,17 +2064,17 @@ sh_make_fstab() {
 }
 
 sh_activating_services() {
-    #dica: No Void, com dbus ativo, o elogind e o polkitd sobem automaticamente.
-    #      Você não precisa ativar os serviços deles no runit.
-	local aServicesTTY=(dbus sshd chronyd udevd wpa_supplicant uuidd dmeventd acpid)
-	local aServicesX=(bluetoothd)
+	#dica: No Void, com dbus ativo, o elogind e o polkitd sobem automaticamente.
+	#      Você não precisa ativar os serviços deles no runit.
+	local aServicesTTY=(dbus sshd chronyd udevd wpa_supplicant uuidd dmeventd acpid socklog-unix)
+	local aServicesX=(bluetoothd avahi-daemon)
 	local service
 	local level=2
 
-	if ! $LSERVER; then
-		aServicesTTY+=(NetworkManager)
-	else
+	if $LSERVER; then
 		aServicesTTY+=(dhcpcd)
+	else
+		aServicesTTY+=(NetworkManager)
 	fi
 
 	for x in "${aDE[@]}"; do
@@ -2077,10 +2105,10 @@ sh_activating_services() {
 }
 
 sh_global_audio_cleaning() {
-    local cuser="${AsUser[cuser]}"
-    # LIMPEZA GLOBAL — remover qualquer autostart do sistema
-    # (evita conflito com configuração do usuário)
-    sh_chroot_job "${cmsg_Ajustando} sound global" "
+	local cuser="${AsUser[cuser]}"
+	# LIMPEZA GLOBAL — remover qualquer autostart do sistema
+	# (evita conflito com configuração do usuário)
+	sh_chroot_job "${cmsg_Ajustando} sound global" "
         # remover PipeWire global
         sudo rm -f /etc/xdg/autostart/pipewire.desktop
         sudo rm -f /etc/xdg/autostart/pipewire-pulse.desktop
@@ -2110,10 +2138,10 @@ sh_global_audio_cleaning() {
 }
 
 sh_activating_pipewire() {
-  local cuser="${AsUser[cuser]}"
+	local cuser="${AsUser[cuser]}"
 
-    sh_global_audio_cleaning
-    sh_chroot_job "${cmsg_Ajustando} Pipewire (user autostart)" "
+	sh_global_audio_cleaning
+	sh_chroot_job "${cmsg_Ajustando} Pipewire (user autostart)" "
 
    # DESATIVAR AUTOSPAWN DO PULSEAUDIO (usuário)
    # impede PulseAudio iniciar automaticamente
@@ -2139,10 +2167,10 @@ EOF
 }
 
 sh_activating_pulseaudio() {
-    local cuser="${AsUser[cuser]}"
+	local cuser="${AsUser[cuser]}"
 
-    sh_global_audio_cleaning
-    sh_chroot_job "${cmsg_Ajustando} PulseAudio (user autostart)" "
+	sh_global_audio_cleaning
+	sh_chroot_job "${cmsg_Ajustando} PulseAudio (user autostart)" "
 
     #AUTOSTART CORRETO (SÓ USUÁRIO)
     mkdir -p /home/$cuser/.config/autostart
@@ -2340,25 +2368,34 @@ sh_openbox_minimal() {
 }
 
 sh_plasma_minimal() {
-	local apkgs=(kde5 plasma-desktop plasma-nm plasma-pa plasma-disks kate konsole dolphin)
+	local apkgs=(kde5
+		plasma-desktop
+		plasma-nm
+		plasma-pa
+		plasma-disks
+		kate
+		konsole
+		dolphin
+	)
 	local DE='Plasma Desktop'
 
-    apkgs+=(
-        voidbr-plasma-config
-        voidbr-wallpapers
-        voidbr-tokyo-theme
-        voidbr-professional-theme
-        voidbr-beauty-icons
-    )
+	if $LCUSTOM; then
+		apkgs+=(
+			kf6-kaccounts-integration
+			kaccounts-providers
+			kf6-kaccounts-integration
+			signon-kwallet-extension
+		)
 
-    if $LCUSTOM; then
-        apkgs+=(
-            kf6-kaccounts-integration
-            kaccounts-providers
-            kf6-kaccounts-integration
-            signon-kwallet-extension
-        )
-    fi
+		apkgs+=(
+			voidbr-plasma-config
+			voidbr-wallpapers
+			voidbr-tokyo-theme
+			voidbr-professional-theme
+			voidbr-beauty-icons
+		)
+
+	fi
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -2370,16 +2407,13 @@ sh_cinnamon_minimal() {
 	if $LCUSTOM; then
 		apkgs+=(
 			plank
+			voidbr-cinnamon-config
+			voidbr-wallpapers
+			voidbr-tokyo-theme
+			voidbr-professional-theme
+			voidbr-beauty-icons
 		)
-
 	fi
-	apkgs+=(
-		voidbr-cinnamon-config
-		voidbr-wallpapers
-		voidbr-tokyo-theme
-		voidbr-professional-theme
-		voidbr-beauty-icons
-	)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -2393,12 +2427,17 @@ sh_enlightenment_minimal() {
 		acpi
 		acpid
 		connman
-		voidbr-enlightenment-config
-		voidbr-wallpapers
-		voidbr-tokyo-theme
-		voidbr-professional-theme
-		voidbr-beauty-icons
 	)
+
+	if $LCUSTOM; then
+		apkgs+=(
+			voidbr-enlightenment-config
+			voidbr-wallpapers
+			voidbr-tokyo-theme
+			voidbr-professional-theme
+			voidbr-beauty-icons
+		)
+	fi
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -2411,35 +2450,31 @@ sh_xfce4_minimal() {
 		xfce4-dict
 		xfce4-datetime-plugin
 		xfce4-pulseaudio-plugin
-		ristretto
-		engrampa
-		file-roller
-		thunar-archive-plugin
-		plank
-		gvfs
-		bluez
-		bluez-alsa
-		blueman
-		libspa-bluetooth
-		blueberry
-		mate-calc
-		umc
 	)
 
 	if $LCUSTOM; then
 		apkgs+=(
+			thunar-archive-plugin
+			gvfs
+			bluez
+			bluez-alsa
+			blueman
+			libspa-bluetooth
+			ristretto
+			engrampa
+			file-roller
+			blueberry
+			mate-calc
+			umc
 			plank
+			voidbr-xfce-config
+			voidbr-wallpapers
+			voidbr-tokyo-theme
+			voidbr-professional-theme
+			voidbr-beauty-icons
+			voidbr-xfwm-axiom-theme
 		)
-
 	fi
-	apkgs+=(
-		voidbr-xfce-config
-		voidbr-wallpapers
-		voidbr-tokyo-theme
-		voidbr-professional-theme
-		voidbr-beauty-icons
-		voidbr-xfwm-axiom-theme
-	)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -2512,7 +2547,6 @@ sh_gnome_minimal() {
 		"wireplumber"              # Gerenciador de sessão para Pipewire
 		"xdg-desktop-portal-gnome" # Integração de interface e permissões para Wayland
 		"xdg-user-dirs-gtk"        # Gerenciamento automático das pastas padrão de usuário
-		voidbr-change-gnome-wallpaper
 	)
 
 	if $LCUSTOM; then
@@ -2523,14 +2557,15 @@ sh_gnome_minimal() {
 			gnome-taquin gnome-tetravex gnome-tweaks gnome-usage hitori iagno lightsoff
 			polari quadrapassel swell-foop sysprof tali
 		)
+		apkgs+=(
+			voidbr-gnome-config
+			voidbr-wallpapers
+			voidbr-tokyo-theme
+			voidbr-professional-theme
+			voidbr-beauty-icons
+			voidbr-change-gnome-wallpaper
+		)
 	fi
-	apkgs+=(
-		voidbr-gnome-config
-		voidbr-wallpapers
-		voidbr-tokyo-theme
-		voidbr-professional-theme
-		voidbr-beauty-icons
-	)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -2577,16 +2612,19 @@ sh_mate_minimal() {
 		eom
 		mozo
 		pluma
-		plank
-		brisk-menu
 	)
-	apkgs+=(
-		voidbr-mate-config
-		voidbr-wallpapers
-		voidbr-tokyo-theme
-		voidbr-professional-theme
-		voidbr-beauty-icons
-	)
+
+	if $LCUSTOM; then
+		apkgs+=(
+			plank
+			brisk-menu
+			voidbr-mate-config
+			voidbr-wallpapers
+			voidbr-tokyo-theme
+			voidbr-professional-theme
+			voidbr-beauty-icons
+		)
+	fi
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -2627,8 +2665,13 @@ sh_bspwm_minimal() {
 		rofi
 		gtk-engine-murrine
 		gtk2-engines
-		chili-void-bspwm-skel
 	)
+
+	if $LCUSTOM; then
+		apkgs+=(
+			chili-void-bspwm-skel
+		)
+	fi
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -3284,7 +3327,7 @@ sh_choose_mirror() {
 			;;
 		esac
 		AConfMirror[_MIRROR]="$mirror"
-        url_mirror="$(sh_splitarray "${Amirror[$mirror]}" "$FLD_REPOSITORY")"
+		url_mirror="$(sh_splitarray "${Amirror[$mirror]}" "$FLD_REPOSITORY")"
 		AConfMirror[url_mirror]="$url_mirror"
 		AConfMirror[location]="$(sh_splitarray "${Amirror[$mirror]}" "$FLD_LOCATION")"
 		LMIRROR=true
@@ -3879,7 +3922,8 @@ sh_dryrun() {
 	#  sh_update_sshd
 	#  sh_update_sudoers
 	#  sh_make_fstab
-	sh_update_sddm_conf
+	#	sh_update_sddm_conf
+	sh_build_and_apply_dhcpcd_config
 	export PS1="[chroot $dir_install] $PS1"
 	LC_ALL=C chroot "$dir_install" "/bin/bash"
 	sh_umount_fs
@@ -4016,7 +4060,9 @@ sh_choose_wm() {
 	#		sway "${aWm[sway]}" "${aFlag[sway]}" \
 	#		twm "${aWm[twm]}" "${aFlag[twm]}" \
 
-	wm=$(${DIALOG} --title "=== ${cmsg_Wm^^} ===" \
+	wm=$(${DIALOG} \
+		--backtitle "$ccabec" \
+		--title "=== ${cmsg_Wm^^} ===" \
 		--default-item "$_WINDOWMANAGER" \
 		--colors \
 		--cancel-label "${cmsg_ButtonBack}" \
@@ -4057,13 +4103,15 @@ sh_choose_wm() {
 	ok=true
 	for wm in "${_WINDOWMANAGER[@]}"; do
 		case "$wm" in
-		tty | server | xorg) ;;
+		tty | xorg) ;;
+		server) LSERVER=true ;;
 		*)
 			ok=false
 			break
 			;;
 		esac
 	done
+
 	if $ok; then
 		LONLY_TTY=true
 		AConfAudio[_AUDIOSERVER]="None"
@@ -4071,11 +4119,11 @@ sh_choose_wm() {
 	else
 		LONLY_TTY=false
 		AConfAudio[_AUDIOSERVER]="Pipewire"
-	    if grep -qi gnome <<<"${_WINDOWMANAGER[@]}"; then
-    		_DISPLAYMANAGER="gdm"
-        else
-    		_DISPLAYMANAGER="sddm"
-    	fi
+		if grep -qi gnome <<<"${_WINDOWMANAGER[@]}"; then
+			_DISPLAYMANAGER="gdm"
+		else
+			_DISPLAYMANAGER="sddm"
+		fi
 	fi
 	LAUDIO=true
 	LDM=true
@@ -4087,6 +4135,100 @@ sh_choose_wm() {
 	if grep -qi hyprland <<<"${_WINDOWMANAGER[@]}"; then
 		HYPRLAND=true
 	fi
+
+	LDHCP=false
+	if $LSERVER; then
+		if conf "=== IP SERVER ===" \
+			"\n${BOLD}${WHITE}$(gettext "Uma instalação SERVIDOR foi escolhida")\n" \
+			"\n${BOLD}${RED}$(gettext "Deseja configurar IP fixo?")\n\n"; then
+			sh_configure_dhcpcd_static_ip_dialog
+		fi
+	fi
+}
+
+get_default_iface() {
+	ip route | awk '/default/ {print $5; exit}'
+}
+
+sh_configure_dhcpcd_static_ip_dialog() {
+	local CONFIG_FILE="/etc/dhcpcd.conf"
+	local DEFAULT_IFACE
+
+	# detecta interface padrão
+	DEFAULT_IFACE="$(get_default_iface)"
+
+	sh_setAsDhcp
+
+	# formulário
+	while true; do
+		exec 3>&1
+		dhcptext=$(dialog \
+			--backtitle "$ccabec" \
+			--title "$(gettext "Configuração de IP fixo (dhcpcd)")" \
+			--form "$(gettext "Preencha os dados:")" \
+			15 60 6 \
+			"$(gettext "Interface:")" 1 1 "${AsDhcp[IFACE]}" 1 25 20 0 \
+			"$(gettext "IP:")" 2 1 "${AsDhcp[IP]}" 2 25 20 0 \
+			"$(gettext "Máscara (CIDR):")" 3 1 "${AsDhcp[CIDR]}" 3 25 20 0 \
+			"$(gettext "Gateway:")" 4 1 "${AsDhcp[GATEWAY]}" 4 25 20 0 \
+			"$(gettext "DNS 1:")" 5 1 "${AsDhcp[DNS1]}" 5 25 20 0 \
+			"$(gettext "DNS 2:")" 6 1 "${AsDhcp[DNS2]}" 6 25 20 0 \
+			2>&1 >/dev/tty)
+
+		exit_status=$?
+		case $exit_status in
+		"$D_ESC" | "$D_CANCEL")
+			return
+			;;
+		"$D_OK")
+			# extrai valores
+			mapfile -t adhcp <<<"$dhcptext"
+			AsDhcp[IFACE]="${adhcp[0]}"
+			AsDhcp[IP]="${adhcp[1]}"
+			AsDhcp[CIDR]="${adhcp[2]}"
+			AsDhcp[GATEWAY]="${adhcp[3]}"
+			AsDhcp[DNS1]="${adhcp[4]}"
+			AsDhcp[DNS2]="${adhcp[5]}"
+
+			# mensagem confirmação
+			CONFIRM_MSG="$(printf "%s\n\n%s: %s\n%s: %s/%s\n%s: %s\n%s: %s %s" \
+				"${BOLD}${RED}$(gettext "Aplicar essas configurações?")" \
+				"${RESET}$(gettext "Interface")" "${AsDhcp[IFACE]}" \
+				"$(gettext "IP")" "${AsDhcp[IP]}" "${AsDhcp[CIDR]}" \
+				"$(gettext "Gateway")" "${AsDhcp[GATEWAY]}" \
+				"$(gettext "DNS")" "${AsDhcp[DNS1]}" "${AsDhcp[DNS2]}")"
+
+			#   dialog --yesno "$CONFIRM_MSG" 12 50
+			if conf "=== DHCP ===" "$CONFIRM_MSG"; then
+				LDHCP=true
+			fi
+			;;
+		esac
+		exec 3>&-
+		return 0
+	done
+}
+
+sh_build_and_apply_dhcpcd_config() {
+	local CONFIG_FILE="$dir_install/etc/dhcpcd.conf"
+	local BACKUP_FILE="${CONFIG_FILE}.$(sh_diahora)"
+
+	sh_info_msg "%(gettext 'Aplicando configuração do dhcpd')"
+	# backup somente se existir
+	if [[ -f "$CONFIG_FILE" ]]; then
+		mv -f "$CONFIG_FILE" "$BACKUP_FILE"
+	fi
+
+	# cria novo arquivo
+	cat >"$CONFIG_FILE" <<EOF
+# See dhcpcd.conf(5) for details.
+
+interface ${AsDhcp[IFACE]}
+static ip_address=${AsDhcp[IP]}/${AsDhcp[CIDR]}
+static routers=${AsDhcp[GATEWAY]}
+static domain_name_servers=${AsDhcp[DNS1]} ${AsDhcp[DNS2]}
+EOF
+
 }
 
 sh_choose_dm() {
@@ -4548,7 +4690,7 @@ sh_copy_keys() {
 }
 
 sh_configure_rootfs() {
-    XBPS_REPOSITORY="$XBPS_REPOSITORY ""\
+	XBPS_REPOSITORY="$XBPS_REPOSITORY ""\
     --repository=${url_mirror}/current""\
     --repository=${url_mirror}/current--repository=https://home.chililinux.com/voidlinux/extra""\
     --repository=--repository=${url_mirror}/current/nonfree""\
@@ -4755,8 +4897,8 @@ sh_install() {
 	local end_datetime
 	local akernel=(linux)
 	local afirmware=(wifi-firmware)
-	local abase=(voidbr-base-config chrony wireless_tools wpa_supplicant pigz)
-	local agrub=(grub-i386-efi grub-utils)
+	local abase=(gettext voidbr-base-config chrony wireless_tools wpa_supplicant pigz zstd xz sed grep socklog socklog-void) #voidbr-plymouth-theme
+	local agrub=(grub-i386-efi grub-utils grub-terminus grub-btrfs-runit voidbr-grub-theme)
 
 	if $LVM; then
 		abase+=(lvm2)
@@ -4764,12 +4906,6 @@ sh_install() {
 
 	if $LFDE; then
 		abase+=(cryptsetup)
-	fi
-
-	if $LCUSTOM; then
-		abase+=(socklog-void)
-		agrub+=(grub-terminus)
-		agrub+=(grub-btrfs-runit)
 	fi
 
 	ncounter=0
@@ -4839,19 +4975,7 @@ sh_install() {
 			sh_grubInstall
 			sh_make_fstab
 
-			LONLY_TTY=false
-			if ((${#_WINDOWMANAGER[@]} == 1)) && [[ "${_WINDOWMANAGER[0]}" == "tty" ]]; then
-				LONLY_TTY=true
-				LSERVER=false
-				:
-			elif ((${#_WINDOWMANAGER[@]} == 1)) && [[ "${_WINDOWMANAGER[0]}" == "server" ]]; then
-				LONLY_TTY=true
-				LSERVER=true
-			elif [[ " ${_WINDOWMANAGER[*]} " == *" tty "* && " ${_WINDOWMANAGER[*]} " == *" server "* ]]; then
-				LONLY_TTY=true
-				LSERVER=true
-				:
-			else
+			if ! $LONLY_TTY; then
 				sh_update_Xkeymap
 				sh_X11_minimal
 			fi
@@ -4899,7 +5023,7 @@ sh_install() {
 			if [[ "${AConfAudio[_AUDIOSERVER]}" == 'Pipewire' ]]; then
 				sh_activating_pipewire
 			elif [[ "${AConfAudio[_AUDIOSERVER]}" == 'Pulseaudio' ]]; then
-			    sh_activating_pulseaudio
+				sh_activating_pulseaudio
 			fi
 
 			case $_DISPLAYMANAGER in
@@ -4911,7 +5035,13 @@ sh_install() {
 
 			sh_activating_services
 
-			sh_chroot_job "$(gettext 'Ajustando e validando configuração em:') $dir_install" "
+			if $LSERVER; then
+				if $LDHCP; then
+					sh_build_and_apply_dhcpcd_config
+				fi
+			fi
+
+			sh_chroot_job "$(gettext 'Validando configuração para finalizar em:') $dir_install" "
                 xbps-reconfigure --force glibc-locales
                 xbps-reconfigure --force --all
             "
@@ -5499,7 +5629,7 @@ sh_main_menu() {
 			DEFITEM="${cmsg_Mirror}"
 		fi
 
-        ccabec="${baseccabec} - ${RED}${url_mirror}"
+		ccabec="${baseccabec} - ${RED}${url_mirror}"
 		$LMIRROR && MENU_MIRROR="${YELLOW}[${AConfMirror[_MIRROR]}]${RST} ● " || MENU_MIRROR="${RED}[not defined]${RST} ● "
 		$LSOURCE && MENU_SOURCE="${YELLOW}[${AConfMirror[_SOURCE]}]${RST} ● " || MENU_SOURCE="${RED}[not defined]${RST} ● "
 		$LDISK && MENU_DEVICE="${YELLOW}[${AConfDisk[_DEVICE]}]${RST} ● " || MENU_DEVICE="${RED}[not defined]${RST} ● "
@@ -6539,6 +6669,7 @@ sh_check_lock
 	exit $(($# ? 0 : 1))
 }
 
+reset
 sh_checkDependencies
 sh_checkRoot
 sh_checkDisplay
