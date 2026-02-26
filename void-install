@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: sáb 14 fev 2026 03:35:00 -04
+#  Updated: ter 24 fev 2026 19:47:44 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.2.14-20260214'
+readonly _VERSION_='3.2.24-20260224'
 readonly DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr chroot blkid fdisk parted lsblk curl xz mkfs.vfat tee lvm cryptsetup gettext)
 readonly LOCKFILE="/tmp/void-install.lock"
 
@@ -4543,7 +4543,7 @@ EOF
 
 	if $LBIOS; then
 		sh_chroot_job "${cmsg_Instalando} GRUB $(gettext 'para a plataforma') i386-pc ${cmsg_Em} ${AConfDisk[_BOOTLOADER]}" "
-		   grub-install ${AConfDisk[_BOOTLOADER]} --target=i386-pc
+		   grub-install ${AConfDisk[_BOOTLOADER]} --target=i386-pc --force
 	   "
 	fi
 	if $LEFI; then
