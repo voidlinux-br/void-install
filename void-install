@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: ter 24 fev 2026 19:47:44 -04
+#  Updated: qua 18 mar 2026 08:34:02 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.2.24-20260224'
+readonly _VERSION_='3.3.18-20260318'
 readonly DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr chroot blkid fdisk parted lsblk curl xz mkfs.vfat tee lvm cryptsetup gettext)
 readonly LOCKFILE="/tmp/void-install.lock"
 
@@ -1517,43 +1517,39 @@ sh_mkparted() {
 		CSCRIPT+="mklabel $label_type "
 
 		if [[ "$label_type" = "gpt" ]]; then
-			CSCRIPT+='mkpart primary fat32 1MiB   2MiB set 1 bios_grub on name 1 BIOS '
-			CSCRIPT+='mkpart primary fat32 2MiB 258MiB set 2 esp on       name 2 EFI  '
-			#			Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}1"]="||0")
+			CSCRIPT+='mkpart primary fat32 2MiB   4MiB set 1 bios_grub on name 1 BIOS '
+			CSCRIPT+='mkpart primary fat32 4MiB 260MiB set 2 esp on       name 2 EFI  '
 			Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}2"]="/boot/efi|vfat|1")
-			cini='258MiB'
+			cini='260MiB'
 			cpart='3'
+
 			if $withswap; then
 				CSCRIPT+="mkpart primary linux-swap $cini 3G name $cpart SWAP "
 				Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}$cpart"]="none|swap|1")
 				cini='3G'
 				cpart='4'
 			fi
+
 			CSCRIPT+="mkpart primary $cini 100% name $cpart ROOT "
 			Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}$cpart"]="/|ext4|1")
 		else
-			cini='1MiB'
+			cini='2MiB'
 			cpart='1'
+
 			if $withswap; then
 				CSCRIPT+="mkpart primary linux-swap $cini 3G "
 				Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}$cpart"]="none|swap|1")
 				cini='3G'
 				cpart='2'
 			fi
+
 			CSCRIPT+="mkpart primary $cini 100% set $cpart boot on "
 			Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}$cpart"]="/|ext4|1")
 		fi
-		CSCRIPT+='align-check optimal 1'
-		CSCRIPT+='align-check optimal 2'
-		CSCRIPT+='align-check optimal 3'
 
-		if $withswap; then
-			CSCRIPT+='align-check optimal 4'
-		fi
-
-		parted --script "${AConfDisk[_DEVICE]}" -- "$CSCRIPT" 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
+		parted --align=opt --script "${AConfDisk[_DEVICE]}" -- "$CSCRIPT" 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
 		evaluate_retval "${PIPESTATUS[0]}"
-		parted --script "${AConfDisk[_DEVICE]}" -- print 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
+		parted --align=opt --script "${AConfDisk[_DEVICE]}" -- print 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
 		Amkfs+=(["vfat"]="mkfs.vfat")
 		Amkfs+=(["swap"]="mkswap")
 		Amkfs+=(["ext4"]="mkfs.ext4")
@@ -2067,15 +2063,12 @@ sh_activating_services() {
 	#dica: No Void, com dbus ativo, o elogind e o polkitd sobem automaticamente.
 	#      Você não precisa ativar os serviços deles no runit.
 	local aServicesTTY=(dbus sshd chronyd udevd wpa_supplicant uuidd dmeventd acpid socklog-unix)
-	local aServicesX=(bluetoothd avahi-daemon)
+	local aServicesX=(avahi-daemon)
 	local service
 	local level=2
 
-	if $LSERVER; then
-		aServicesTTY+=(dhcpcd)
-	else
-		aServicesTTY+=(NetworkManager)
-	fi
+	$LSERVER && aServicesTTY+=(dhcpcd) || aServicesTTY+=(NetworkManager)
+	! $ONLY_TTY && aServicesX+=(bluetoothd)
 
 	for x in "${aDE[@]}"; do
 		case $x in
@@ -2789,12 +2782,17 @@ sh_vg_info() {
 
 sh_disk_info() {
 	unset ARRAY_DSK_{DISKS,DEVICES,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE}
-	local {NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE}_
+	local {TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE}_
 
 	mensagem "$(gettext "=== DISCO ===")" "\n\n${BOLD}${WHITE}$(gettext 'Aguarde... coletando informações')"
+
 	AARRAY_DSK_DEVICES=()
-	while read -r line; do
+
+	while IFS= read -r line; do
+		unset TYPE_ NAME_ PATH_ SIZE_ TRAN_ MODEL_ LABEL_ SERIAL_ PTTYPE_ FSTYPE_
+
 		eval "${line//=/_=}"
+
 		ARRAY_DSK_DISKS+=("$NAME_")
 		ARRAY_DSK_DEVICES+=("$PATH_")
 		ARRAY_DSK_SIZE+=("$SIZE_")
@@ -2804,8 +2802,14 @@ sh_disk_info() {
 		ARRAY_DSK_SERIAL+=("${SERIAL_:-""}")
 		ARRAY_DSK_PTTYPE+=("${PTTYPE_:-""}")
 		ARRAY_DSK_FSTYPE+=("${FSTYPE_:-none}")
-		AARRAY_DSK_DEVICES+=(["$PATH_"]="$NAME_|$SIZE_|${TRAN_:-${TYPE_}}|${MODEL_:-unknown}|${LABEL_:-""}|${SERIAL_:-""}|${PTTYPE_:-""}|${FSTYPE_:-"none"}")
-	done < <(lsblk -PAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE | grep -P 'TYPE="(disk|loop|lvm)"' | sort -k5,5 -k2,2)
+		AARRAY_DSK_DEVICES["$PATH_"]="$NAME_|$SIZE_|${TRAN_:-${TYPE_}}|${MODEL_:-unknown}|${LABEL_:-""}|${SERIAL_:-""}|${PTTYPE_:-""}|${FSTYPE_:-none}"
+	done < <(
+		lsblk -PAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE |
+			grep -P 'TYPE="(disk|loop|lvm)"' |
+			grep -Pv 'NAME=".*(_tdata|-data|_tmeta|-tpool)"' |
+			awk -F'"' '!seen[$6]++'
+	)
+	#	done < <(lsblk -PAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE | grep -P 'TYPE="(disk|loop|lvm)"' | sort -k5,5 -k2,2)
 }
 
 sh_disk_part_info() {
@@ -2846,7 +2850,11 @@ sh_disk_part_info() {
 			ARRAY_PART_PARTTYPENAME+=("${PARTTYPENAME_:-none}")
 			AARRAY_PART_DEVICES+=(["$PATH_"]="$NAME_|$SIZE_|${TRAN_:-${TYPE_}}|${MODEL_:-unknown}|${LABEL_:-""}|${SERIAL_:-""}|${FSTYPE_:-"none"}|${PARTTYPENAME_:-none}")
 		fi
-	done < <(lsblk -PAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE,PARTTYPENAME | grep -P 'TYPE="(disk|loop|lvm|part)"' | sort -k5,5 -k2,2)
+	done < <(lsblk -PAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE,PARTTYPENAME |
+		grep -P 'TYPE="(disk|loop|lvm|part)"' |
+		grep -Pv 'NAME=".*(_tdata|-data|_tmeta|-tpool)"' |
+		sort -u -t'"' -k6,6)
+	#  	done < <(lsblk -PAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE,PARTTYPENAME | grep -P 'TYPE="(disk|loop|lvm|part)"' | sort -k5,5 -k2,2)
 }
 
 sh_part_info() {
@@ -2870,7 +2878,13 @@ sh_part_info() {
 		ARRAY_PART_FSTYPE+=("${FSTYPE_:-none}")
 		ARRAY_PART_PARTTYPENAME+=("${PARTTYPENAME_:-none}")
 		AARRAY_PART_DEVICES+=(["$PATH_"]="$NAME_|$SIZE_|${TRAN_:-${TYPE_}}|${MODEL_:-unknown}|${LABEL_:-""}|${SERIAL_:-""}|${FSTYPE_:-"none"}|${PARTTYPENAME_:-none}")
-	done < <(lsblk -fPAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,FSTYPE,PARTTYPENAME | grep -P 'TYPE="(part)"' | sort -k5,5 -k2,2)
+	done < <(
+		lsblk -PAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE |
+			grep -P 'TYPE="(part)"' |
+			grep -Pv 'NAME=".*(_tdata|_tmeta|-tpool)"' |
+			awk -F'"' '!seen[$6]++'
+	)
+	#	done < <(lsblk -fPAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,FSTYPE,PARTTYPENAME | grep -P 'TYPE="(part)"' | sort -k5,5 -k2,2)
 }
 
 sh_getIso() {
@@ -3471,8 +3485,8 @@ sh_getNvme() {
 	tran="$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_DEVICE]}]}" $DSK_TRAN)"
 
 	case "$tran" in
-	nvme | loop) echo 'p' ;;
-	lvm) echo '' ;;
+	nvme | loop | lvm) echo 'p' ;;
+	#lvm) echo '' ;;
 	*)
 		case "$name" in
 		zram*) echo 'p' ;;
@@ -3492,7 +3506,7 @@ sh_getlgrub() {
 	fi
 }
 
-sh_chooseDisk() {
+sh_choose_disk() {
 	local old_device="${AConfDisk[_DEVICE]}"
 
 	sh_umount_fs
@@ -3593,7 +3607,7 @@ $(printf "%${nlen}s$sep%-4s$sep%-6s$sep%6s$sep%-6s$sep%-15s$sep%-30s" "DEVICE" "
 }
 
 sh_setBootLoader() {
-	if sh_chooseDisk "=== BOOTLOADER (GRUB) ==="; then
+	if sh_choose_disk "=== BOOTLOADER (GRUB) ==="; then
 		AConfDisk[_BOOTLOADER]="${AConfDisk[_DEVICE]}"
 		LGRUB=true
 		LOSPROBER=false
@@ -5690,7 +5704,7 @@ sh_main_menu() {
 		case "$menu" in
 		"${cmsg_Mirror}") sh_choose_mirror "$@" && [ -n "$LMIRROR" ] && DEFITEM="${cmsg_Source}" ;;
 		"${cmsg_Source}") sh_chooseSource && [ -n "$LSOURCE" ] && DEFITEM="${cmsg_Disco}" ;;
-		"${cmsg_Disco}") sh_chooseDisk && [ -n "$LDISK" ] && DEFITEM="${cmsg_BootLoader}" ;;
+		"${cmsg_Disco}") sh_choose_disk && [ -n "$LDISK" ] && DEFITEM="${cmsg_BootLoader}" ;;
 		"${cmsg_BootLoader}") sh_setBootLoader && [ -n "$LGRUB" ] && DEFITEM="FileSystem" ;;
 		"FileSystem") sh_choosePartition && [ -n "$LPARTITION" ] && DEFITEM="${cmsg_Teclado}" ;;
 		"${cmsg_Teclado}") sh_chooseKeymap && [ -n "$LKEYMAP" ] && DEFITEM="Timezone" ;;
