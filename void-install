@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: qua 18 mar 2026 08:34:02 -04
+#  Updated: qui 26 mar 2026 12:53:06 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.3.18-20260318'
+readonly _VERSION_='3.3.26-20260326'
 readonly DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr chroot blkid fdisk parted lsblk curl xz mkfs.vfat tee lvm cryptsetup gettext)
 readonly LOCKFILE="/tmp/void-install.lock"
 
@@ -2068,7 +2068,7 @@ sh_activating_services() {
 	local level=2
 
 	$LSERVER && aServicesTTY+=(dhcpcd) || aServicesTTY+=(NetworkManager)
-	! $ONLY_TTY && aServicesX+=(bluetoothd)
+	! $LSERVER && ! $ONLY_TTY && aServicesX+=(bluetoothd)
 
 	for x in "${aDE[@]}"; do
 		case $x in
