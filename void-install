@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: qui 26 mar 2026 12:53:06 -04
+#  Updated: dom 29 mar 2026 23:07:33 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.3.26-20260326'
+readonly _VERSION_='3.3.29-20260329'
 readonly DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr chroot blkid fdisk parted lsblk curl xz mkfs.vfat tee lvm cryptsetup gettext)
 readonly LOCKFILE="/tmp/void-install.lock"
 
@@ -624,6 +624,9 @@ sh_choose_common_packages() {
 		aNetworkX=(network-manager-applet)
 	fi
 
+	if $LSERVER; then
+		aDaemons+=(iptables dbus acpid)
+	fi
 	if ! $LSERVER; then
 		aDaemons+=(NetworkManager)
 	fi
@@ -2067,7 +2070,7 @@ sh_activating_services() {
 	local service
 	local level=2
 
-	$LSERVER && aServicesTTY+=(dhcpcd) || aServicesTTY+=(NetworkManager)
+	$LSERVER && aServicesTTY+=(dhcpcd iptables) || aServicesTTY+=(NetworkManager)
 	! $LSERVER && ! $ONLY_TTY && aServicesX+=(bluetoothd)
 
 	for x in "${aDE[@]}"; do
@@ -4223,6 +4226,22 @@ sh_configure_dhcpcd_static_ip_dialog() {
 	done
 }
 
+sh_create_empty_iptables_rules() {
+	local CONFIG_FILE="$dir_install/etc/iptables/iptables.rules"
+
+	sh_info_msg "%(gettext 'Aplicando configuração do iptables')"
+
+	# cria novo arquivo
+	cat >"$CONFIG_FILE" <<EOF
+# Empty iptables rule file
+*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+COMMIT
+EOF
+}
+
 sh_build_and_apply_dhcpcd_config() {
 	local CONFIG_FILE="$dir_install/etc/dhcpcd.conf"
 	local BACKUP_FILE="${CONFIG_FILE}.$(sh_diahora)"
@@ -5050,6 +5069,7 @@ sh_install() {
 			sh_activating_services
 
 			if $LSERVER; then
+        sh_create_empty_iptables_rules
 				if $LDHCP; then
 					sh_build_and_apply_dhcpcd_config
 				fi
