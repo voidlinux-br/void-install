@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: dom 29 mar 2026 23:07:33 -04
+#  Updated: dom 26 abr 2026 22:09:54 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.3.29-20260329'
+readonly _VERSION_='3.4.26-20260426'
 readonly DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr chroot blkid fdisk parted lsblk curl xz mkfs.vfat tee lvm cryptsetup gettext)
 readonly LOCKFILE="/tmp/void-install.lock"
 
@@ -496,7 +496,7 @@ sh_choose_common_packages() {
 
 		declare -ga aSuplemento=(
 			chili-utils
-			void-utils
+			voidbr-utils
 			voidbr-nano-config
 			voidbr-vinstall
 		)
@@ -5643,7 +5643,7 @@ sh_run_binary() {
 	info "=== ${binary} ===" \
 		"\n${RED}$(gettext "binário não foi localizado no") ${YELLOW}\$PATH${RESET}" \
 		"${RED}$(gettext "binário não foi localizado na pasta local:") ${YELLOW}$PWD${RESET}" \
-		"${YELLOW}\n$(gettext "DICA: instale o pacote void-utils")"
+		"${YELLOW}\n$(gettext "DICA: instale o pacote voidbr-utils")"
 	return 1
 }
 

@@ -11,7 +11,7 @@ url="https://github.com/voidlinuxbr/$pkgname"
 provides=("$pkgname")
 source=("git+${url}.git")
 md5sums=('SKIP')
-depends=('bash>=0' gettext dialog pv rsync gawk grep parted curl lvm2 cryptsetup void-utils xz)
+depends=('bash>=0' gettext dialog pv rsync gawk grep parted curl lvm2 cryptsetup voidbr-utils xz)
 package() {
 	local dirs=("usr" "etc" "opt")
 	#   echo "DESTDIR=$DESTDIR"
