@@ -1,0 +1,4 @@
+- quando instalacao via local e da iso do Void Oficial
+  - instalar os pacotes - socklog e socklog-unix
+  - solicitar prompt para oferecer customizacao (não faz isso agora)
+

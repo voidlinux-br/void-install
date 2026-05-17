@@ -5,7 +5,7 @@
 #  void-install
 #  Created: 2022/12/24
 #  Altered: 2024/03/11
-#  Updated: dom 26 abr 2026 22:09:54 -04
+#  Updated: dom 17 mai 2026 12:13:12 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.4.26-20260426'
+readonly _VERSION_='3.5.10-20260510'
 readonly DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr chroot blkid fdisk parted lsblk curl xz mkfs.vfat tee lvm cryptsetup gettext)
 readonly LOCKFILE="/tmp/void-install.lock"
 
@@ -90,6 +90,7 @@ declare LMIRROR=true
 declare LSOURCE=true
 declare LKEYMAP=true
 declare LTIMEZONE=true
+declare LKERNEL=true
 declare LAUDIO=true
 declare LWM=true
 declare LDM=true
@@ -105,7 +106,7 @@ declare LINSTALL=false
 declare HYPRLAND=false
 declare LVM=false
 declare LFDE=false
-declare LONLY_TTY=false
+declare LONLY_TTY=true
 declare LAUDIO=false
 declare LSERVER=false
 declare LDHCP=false
@@ -170,6 +171,9 @@ declare -gA AConfMirror=(
 )
 declare -gA AConfAudio=(
 	[_AUDIOSERVER]='None'
+)
+declare -gA AConfKernel=(
+	[_KERNEL]='linux'
 )
 declare -gA AConfWifi=(
 	[_NETWORK]='wifi_ssid'
@@ -535,12 +539,12 @@ sh_choose_common_packages() {
 		return
 	fi
 
-	#	debug $LONLY_TTY
+  #debug $LONLY_TTY
 
 	## begin packages
 	if ! $LONLY_TTY; then
-		declare -ga aXorg=(xorg xinit xterm xorg-fonts dbus-x11 elogind dbus-elogind polkit-elogind xdg-user-dirs xrdb)
-		declare -ga aVideo=(mesa-dri linux-firmware-intel xf86-video-amdgpu xf86-video-ati mesa-nouveau-dri)
+		declare -ga aXorg=(xorg xinit xterm xorg-fonts dbus-x11 elogind dbus-elogind polkit-elogind xdg-user-dirs xrdb xorg-server-xwayland)
+		declare -ga aVideo=(mesa-dri linux-firmware-intel xf86-video-amdgpu xf86-video-ati mesa-nouveau-dri libavif libheif gdk-pixbuf libheif-pixbuf-loader)
 		declare -ga aPulseaudio=(pulseaudio pavucontrol pasystray gst-plugins-bad1 gst-plugins-good1 gst-plugins-ugly1 gst-plugins-base1 alsa-plugins-pulseaudio alsa-utils)
 		declare -ga aPipewire=(pipewire wireplumber alsa-pipewire pulseaudio-utils pavucontrol libspa-bluetooth libjack-pipewire alsa-plugins-pulseaudio alsa-utils)
 		declare -ga aDisplaymanager=()
@@ -587,7 +591,6 @@ sh_choose_common_packages() {
 
 		if $LCUSTOM; then
 			if ! $LONLY_TTY; then
-				## X11
 				declare -ga aIconsAndThemes=()
 				declare -ga aArchiverX=()
 				declare -ga aBrowser=()
@@ -626,8 +629,7 @@ sh_choose_common_packages() {
 
 	if $LSERVER; then
 		aDaemons+=(iptables dbus acpid)
-	fi
-	if ! $LSERVER; then
+	else
 		aDaemons+=(NetworkManager)
 	fi
 
@@ -727,7 +729,9 @@ sh_setEnvironment() {
 	: "${LEXTRA=}"
 	: "${LAUDIO=}"
 	: "${LTIMEZONE=}"
+	: "${LKERNEL=}"
 	: "${LFILE=}"
+	: "${LCUSTOM=}"
 
 	# dialog colors
 	GREEN="\Z2"
@@ -769,11 +773,13 @@ sh_touchConf() {
 	EOF
 	{
 		declare -p LDHCP
+		declare -p LCUSTOM
 		declare -p LDISK
 		declare -p LEFI
 		declare -p LAUDIO
 		declare -p LGRUB
 		declare -p LBIOS
+		declare -p LKERNEL
 		declare -p LMKPARTED
 		declare -p _WIFI_NETWORK
 		declare -p _WIFI_PASSWORD
@@ -786,6 +792,7 @@ sh_touchConf() {
 		declare -p AmntpointFDE
 		declare -p AConfDisk
 		declare -p AConfAudio
+		declare -p AConfKernel
 		declare -p AConfLocale
 		declare -p AConfMirror
 		declare -p AConfWifi
@@ -802,17 +809,15 @@ sh_touchConf() {
 }
 
 sh_checkDisplay() {
-	local msg1="$(gettext "Antes de continuar, redimensione o terminal")"
-	local msg2="$(gettext "para que ele meça pelo menos 80 x 24 caracteres.")"
-	local msg3="$(gettext "Caso contrário, ")"
-	local msg4="$(gettext "você não poderá usar as ferramentas de partição de Disco.")"
+	local cmsg1="$(gettext "Antes de continuar, redimensione o terminal")"
+	local cmsg2="$(gettext "para que ele meça pelo menos 80 x 24 caracteres.")"
+	local cmsg3="$(gettext "Caso contrário, ")"
+	local cmsg4="$(gettext "você não poderá usar as ferramentas de partição de Disco.")"
 
 	if [ "$(tput cols)" -lt 80 ] || [ "$(tput lines)" -lt 24 ]; then
 		${DIALOG} --backtitle "$ccabec" \
 			--title "$(gettext "TERMINAL MUITO PEQUENO")" \
-			--msgbox "\n\
-$cms1\n$cmsg2\n\
-$cmsg3$cmsg4" 11 68
+			--msgbox "\n${cmsg1}\n${cmsg2}\n${cmsg3}${cmsg4}" 0 0
 	fi
 }
 
@@ -1569,35 +1574,48 @@ sh_mkparted() {
 sh_update_mirror() {
 	sh_cmd_job "${cmsg_Configurando} ${cmsg_Mirror,,}" "
     conf=\"${dir_install}/etc/xbps.d/00-repository-main.conf\"
-
     {
-      # mirror escolhido (sempre primeiro)
-      echo \"repository=${url_mirror}/current\"
+      # default global
+      echo \"repository=https://repo-fastly.voidlinux.org/current\"
+      echo \"repository=https://repo-fastly.voidlinux.org/current/nonfree\"
+      echo \"repository=https://repo-fastly.voidlinux.org/current/multilib\"
+      echo \"repository=https://repo-fastly.voidlinux.org/current/multilib/nonfree\"
+      echo
 
-      if grep -qiE 'voidbr\\.org|chililinux' <<<\"${url_mirror}\"; then
+      # mirror escolhido
+      echo \"repository=${url_mirror}/current\"
+      if grep -qiE 'voidbr\\.org|chililinux|voidlinux\\.com\\.br' <<<\"${url_mirror}\"; then
         echo \"repository=${url_mirror}/extra\"
       fi
-
       echo \"repository=${url_mirror}/current/nonfree\"
       echo \"repository=${url_mirror}/current/multilib\"
       echo \"repository=${url_mirror}/current/multilib/nonfree\"
 
-      # ChiliLinux (sempre presente)
+      # chililinux.com
       if ! grep -qi 'chililinux' <<<\"${url_mirror}\"; then
+        echo
         echo \"repository=https://void.chililinux.com/voidlinux/current\"
         echo \"repository=https://void.chililinux.com/voidlinux/extra\"
-        echo \"#repository=https://void.chililinux.com/voidlinux/current/nonfree\"
-        echo \"#repository=https://void.chililinux.com/voidlinux/current/multilib\"
-        echo \"#repository=https://void.chililinux.com/voidlinux/current/multilib/nonfree\"
       fi
 
-      # VoidBR (sempre presente)
+      # voidbr.org
       if ! grep -qi 'voidbr\\.org' <<<\"${url_mirror}\"; then
+        echo
         echo \"repository=https://void.voidbr.org/voidlinux/current\"
         echo \"repository=https://void.voidbr.org/voidlinux/extra\"
         echo \"repository=https://void.voidbr.org/voidlinux/current/nonfree\"
         echo \"repository=https://void.voidbr.org/voidlinux/current/multilib\"
         echo \"repository=https://void.voidbr.org/voidlinux/current/multilib/nonfree\"
+      fi
+
+      # voidlinux.com.br
+      if ! grep -qi 'voidlinux\\.com.\\br' <<<\"${url_mirror}\"; then
+        echo
+        echo \"repository=https://void.voidlinux.com.br/voidlinux/current\"
+        echo \"repository=https://void.voidlinux.com.br/voidlinux/extra\"
+        echo \"repository=https://void.voidlinux.com.br/voidlinux/current/nonfree\"
+        echo \"repository=https://void.voidlinux.com.br/voidlinux/current/multilib\"
+        echo \"repository=https://void.voidlinux.com.br/voidlinux/current/multilib/nonfree\"
       fi
     } > \"\$conf\"
   " $err_not_fatal
@@ -1733,6 +1751,7 @@ sh_make_fs() {
 		[jfs]="-f -L VOID"
 		[vfat]="-F32 -n EFI"
 		[reiserfs]="-f -l VOID"
+		[ntfs]="-F -L NTFS"
 	)
 
 	sh_check_util_fs
@@ -2464,6 +2483,7 @@ sh_xfce4_minimal() {
 			umc
 			plank
 			voidbr-xfce-config
+			voidbr-xfce-theme-dracula
 			voidbr-wallpapers
 			voidbr-tokyo-theme
 			voidbr-professional-theme
@@ -2890,6 +2910,18 @@ sh_part_info() {
 	#	done < <(lsblk -fPAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,FSTYPE,PARTTYPENAME | grep -P 'TYPE="(part)"' | sort -k5,5 -k2,2)
 }
 
+set_custom_install() {
+  local ctitle="$1"
+  if conf "${ctitle}" \
+  		"\n${BOLD}${WHITE}$(gettext "Uma instalação customizada irá instalar pacotes extras e também")" \
+  		"\n$(gettext "fazer diversas configurações, evitando faze-las manualmente posteriormente.")\n" \
+  		"\n${BOLD}${RED}$(gettext "Customizar a instalação?")\n\n"; then
+  		LCUSTOM=true
+  	else
+  		LCUSTOM=false
+  	fi
+}
+
 sh_getIso() {
 	if test -e '/run/initramfs/live/LiveOS/squashfs.img'; then
 		return 0
@@ -2959,8 +2991,13 @@ sh_chooseSource() {
 					info "$ccabec" "\n\n$cextra"
 					continue
 				else
+					alerta "=== ${cmsg_Source^^} ===" \
+						"$(gettext "Ao escolher ${CYAN}local${RESET} e usar a ${YELLOW}ISO oficial do Void${RESET}, \ntenha em mente que a ISO ${RED}tem pacotes desatualizados${RESET}, \ne será necessário atualizar pela internet.\n\nTalvez seja melhor escolher network ou networkfull!\n")"
 					LSOURCE=true
 					AConfMirror[_SOURCE]=$src
+					_WINDOWMANAGER=('tty' 'local')
+      		LONLY_TTY=false
+          set_custom_install "=== ${cmsg_Source^^} ==="
 				fi
 			fi
 			;;
@@ -2990,6 +3027,7 @@ sh_choosefstype() {
 	Afs[ext4]="Linux ext4 (journal)"
 	Afs[vfat]="FAT32 (EFI)"
 	Afs[swap]="Linux swap"
+	Afs[ntfs]="Microsoft NTFS (ntfs-3g) (not for root '/')"
 
 	if [[ -z "$oldfstype" ]]; then
 		oldfstype=${AConfDisk[_FILESYSTEM]}
@@ -3075,6 +3113,45 @@ sh_choose_audioserver() {
 	return 0
 }
 
+sh_choose_kernel() {
+  local exit_status
+  local array=()
+  local x
+  local ckernel
+  local current_kernel="${AConfKernel[_KERNEL]:-linux}"
+
+  array+=("linux"    "Linux kernel and modules current default" "$([[ $current_kernel == linux ]] && echo on || echo off)")
+  array+=("linux7.0" "Linux kernel and modules (7.0 series) stable" "$([[ $current_kernel == linux7.0 ]] && echo on || echo off)")
+  array+=("linux6.19" "Linux kernel and modules (6.19 series) stable" "$([[ $current_kernel == linux6.19 ]] && echo on || echo off)")
+  array+=("linux6.18" "Linux kernel and modules (6.18 series) LTS" "$([[ $current_kernel == linux6.18 ]] && echo on || echo off)")
+  array+=("linux6.12" "Linux kernel and modules (6.12 series) LTS" "$([[ $current_kernel == linux6.12 ]] && echo on || echo off)")
+  array+=("linux6.6"  "Linux kernel and modules (6.6 series) LTS" "$([[ $current_kernel == linux6.6 ]] && echo on || echo off)")
+  array+=("linux6.1"  "Linux kernel and modules (6.1 series) LTS" "$([[ $current_kernel == linux6.1 ]] && echo on || echo off)")
+  array+=("linux5.15" "Linux kernel and modules (5.15 series) LTS" "$([[ $current_kernel == linux5.15 ]] && echo on || echo off)")
+  array+=("linux5.10" "Linux kernel and modules (5.10 series) LTS" "$([[ $current_kernel == linux5.10 ]] && echo on || echo off)")
+
+  ckernel=$(${DIALOG} \
+    --title "${cmsg_descKernel}" \
+    --default-item "${current_kernel}" \
+    --colors \
+    --cancel-label "${cmsg_ButtonBack}" \
+    --ok-label "${cmsg_Aceitar}" \
+    --radiolist "${cmsg_MENU}\n\n$cextra" \
+    12 70 0 "${array[@]}" 2>&1 >/dev/tty)
+
+  exit_status=$?
+
+  case $exit_status in
+    "$D_ESC" | "$D_CANCEL")
+      return 1
+      ;;
+  esac
+
+  LKERNEL=true
+  AConfKernel[_KERNEL]="$ckernel"
+  return 0
+}
+
 sh_timedatectl() {
 	local _localtime
 
@@ -3095,15 +3172,13 @@ sh_timedatectl() {
 }
 
 sh_chooseLocale() {
-	local TMPFILE
-	local LOC
-	local LANG
-	local COUNTRY
+	local locale
+	local selected
+	local desc
+	local exit_status
 
-	TMPFILE=$(mktemp -t void-install-XXXXXXXX || exit 1)
 	DEFITEM="${AConfLocale[_LOCALE]}"
 
-	# tabelas básicas (expansível depois)
 	declare -A ISO639=(
 		[pt]="Portuguese"
 		[en]="English"
@@ -3114,66 +3189,148 @@ sh_chooseLocale() {
 		[ja]="Japanese"
 		[zh]="Chinese"
 		[ru]="Russian"
+		[ko]="Korean"
+		[ar]="Arabic"
+		[nl]="Dutch"
+		[sv]="Swedish"
+		[pl]="Polish"
+		[tr]="Turkish"
+		[uk]="Ukrainian"
+		[cs]="Czech"
+		[hu]="Hungarian"
+		[fi]="Finnish"
+		[da]="Danish"
+		[no]="Norwegian"
+		[el]="Greek"
+		[he]="Hebrew"
+		[hi]="Hindi"
+		[bn]="Bengali"
+		[ta]="Tamil"
+		[th]="Thai"
+		[vi]="Vietnamese"
 	)
 
 	declare -A ISO3166=(
 		[BR]="Brazil"
 		[PT]="Portugal"
 		[US]="United States"
+		[GB]="United Kingdom"
 		[AR]="Argentina"
+		[ES]="Spain"
 		[FR]="France"
 		[DE]="Germany"
 		[IT]="Italy"
 		[JP]="Japan"
 		[CN]="China"
+		[TW]="Taiwan"
 		[RU]="Russia"
+		[KR]="South Korea"
+		[SA]="Saudi Arabia"
+		[NL]="Netherlands"
+		[SE]="Sweden"
+		[PL]="Poland"
+		[TR]="Turkey"
+		[UA]="Ukraine"
+		[CZ]="Czech Republic"
+		[HU]="Hungary"
+		[FI]="Finland"
+		[DK]="Denmark"
+		[NO]="Norway"
+		[GR]="Greece"
+		[IL]="Israel"
+		[IN]="India"
+		[BD]="Bangladesh"
+		[TH]="Thailand"
+		[VN]="Vietnam"
 	)
 
-	# captura locales UTF-8 portável (vale Void, Debian, Arch, Alpine, etc)
-	# remove C, POSIX, C.utf8 e variantes
-	locale -a |
-		grep -i utf |
-		grep -vE '^(C|POSIX)(\.|$)' |
-		sort >"$TMPFILE"
+	local LOCALES=(
+		"pt_BR.UTF-8"
+		"pt_PT.UTF-8"
+		"en_US.UTF-8"
+		"en_GB.UTF-8"
+		"es_ES.UTF-8"
+		"es_AR.UTF-8"
+		"fr_FR.UTF-8"
+		"de_DE.UTF-8"
+		"it_IT.UTF-8"
+		"ja_JP.UTF-8"
+		"zh_CN.UTF-8"
+		"zh_TW.UTF-8"
+		"ru_RU.UTF-8"
+		"ko_KR.UTF-8"
+		"ar_SA.UTF-8"
+		"nl_NL.UTF-8"
+		"sv_SE.UTF-8"
+		"pl_PL.UTF-8"
+		"tr_TR.UTF-8"
+		"uk_UA.UTF-8"
+		"cs_CZ.UTF-8"
+		"hu_HU.UTF-8"
+		"fi_FI.UTF-8"
+		"da_DK.UTF-8"
+		"no_NO.UTF-8"
+		"el_GR.UTF-8"
+		"he_IL.UTF-8"
+		"hi_IN.UTF-8"
+		"bn_BD.UTF-8"
+		"ta_IN.UTF-8"
+		"th_TH.UTF-8"
+		"vi_VN.UTF-8"
+	)
 
 	local MENU_ITEMS=()
+	local LOC
+	local LANG
+	local COUNTRY
+	local LANGNAME
+	local COUNTRYNAME
 
-	while read -r LOC; do
+	for LOC in "${LOCALES[@]}"; do
 		LANG="${LOC%%_*}"
+
 		COUNTRY="${LOC#*_}"
 		COUNTRY="${COUNTRY%%.*}"
 
-		# fallback se não tiver mapeado
 		LANGNAME="${ISO639[$LANG]:-$LANG}"
 		COUNTRYNAME="${ISO3166[$COUNTRY]:-$COUNTRY}"
 
-		MENU_ITEMS+=("$LOC" "$LANGNAME $COUNTRYNAME")
-	done <"$TMPFILE"
+		MENU_ITEMS+=(
+			"$LOC"
+			"$LANGNAME $COUNTRYNAME"
+		)
+	done
 
-	rm -f "$TMPFILE"
-
-	locale=$(${DIALOG} \
-		--title "Select locale" \
-		--default-item "$DEFITEM" \
-		--menu "Choose your locale" \
-		20 70 18 \
-		"${MENU_ITEMS[@]}" 2>&1 >/dev/tty)
+	locale=$(
+		${DIALOG} \
+			--title "$(gettext 'Selecionar locale')" \
+			--default-item "$DEFITEM" \
+			--menu "$(gettext 'Escolha seu locale')" \
+			20 70 18 \
+			"${MENU_ITEMS[@]}" \
+			2>&1 >/dev/tty
+	)
 
 	exit_status=$?
+
 	case $exit_status in
-	"$D_ESC" | "$D_CANCEL")
-		return
-		;;
+		"$D_ESC" | "$D_CANCEL")
+			return
+			;;
 	esac
-	selected="$locale" # o que voltou do dialog
+
+	selected="$locale"
+
 	for ((i = 0; i < ${#MENU_ITEMS[@]}; i += 2)); do
 		if [[ "${MENU_ITEMS[i]}" == "$selected" ]]; then
 			desc="${MENU_ITEMS[i + 1]}"
 			break
 		fi
 	done
+
 	AConfLocale[_LOCALE]="$selected"
 	AConfLocale[_REGION]="$desc"
+
 	LLOCALE=true
 }
 
@@ -3249,44 +3406,42 @@ sh_choose_mirror() {
 	local -i FLD_LOCATION=3
 	local -i FLD_TIER=4
 
-	#		[void.chilios.com.br]="http://void.chilios.com.br/voidlinux/|South and Central America|Pimenta Bueno, Brazil|2"
-	#		[void.chilios.com.br_2]="https://void.chilios.com.br/voidlinux/|South and Central America|Pimenta Bueno, Brazil|2"
-	#		[void.chililinux.com_2]="http://void.chililinux.com/voidlinux/|South and Central America|Pimenta Bueno, Brazil|2"
-	#  	[voidlinux.com.br]="https://voidlinux.com.br/repo/|South and Central America|Ouro Preto, Brazil|2"
-
 	declare -gA Amirror=(
+    #tier 1
 		[repo.fi.voidlinux.org]="https://repo-fi.voidlinux.org/|Europe|Helsinki, Finland|1"
 		[repo.de.voidlinux.org]="https://repo-de.voidlinux.org/|Europe|Frankfurt, Germany|1"
 		[repo.fastly.voidlinux.org]="https://repo-fastly.voidlinux.org/|Globally Available|Fastly Global CDN|1"
 		[mirrors.summithq.com]="https://mirrors.summithq.com/voidlinux/|North America|Chicago, USA|1"
-		[mirrors.servercentral.com]="https://mirrors.servercentral.com/voidlinux/|North America|Chicago, USA|1"
+    #tier 2
+		[mirrors.servercentral.com]="https://mirrors.servercentral.com/voidlinux/|North America|Chicago, USA|2"
 		[mirrors.cicku.me]="https://mirrors.cicku.me/voidlinux/|Globally Available|Cloudflare Global CDN|2"
-		[void.chililinux.com]="https://void.chililinux.com/voidlinux/|South and Central America|Pimenta Bueno/RO, Brazil|2"
-		[void.voidlinux.com.br]="https://void.voidlinux.com.br/voidlinux/|South and Central America|Cacoal/RO, Brazil|2"
-		[void.voidbr.org]="https://void.voidbr.org/voidlinux/|South and Central America|M. do Paranapanema, Brazil|2"
-		[mirror.sjtu.edu.cn]="https://mirror.sjtu.edu.cn/voidlinux/|Asia|Shanghai, China|2"
-		[mirror.clarkson.edu]="https://mirror.clarkson.edu/voidlinux/|North America/|New York, USA|2"
-		[void.webconverger.org]="https://void.webconverger.org/|Asia|Singapore|2"
-		[ftp.swin.edu.au]="https://ftp.swin.edu.au/voidlinux/|Oceania|Melbourne, Australia|2"
-		[ftp.debian.ru]="http://ftp.debian.ru/mirrors/voidlinux/|Europe|Russia|2"
-		[mirror.yandex.ru]="https://mirror.yandex.ru/mirrorsvoidlinux/|Europe|Russia|2"
-		[ftp.dk.xemacs.org]="http://ftp.dk.xemacs.org/voidlinux/|Europe|Denmark|2"
-		[ftp.lysator.liu.se]="https://ftp.lysator.liu.se/pub/voidlinux/|Europe|Sweden|2"
 		[mirror.nju.edu.cn]="https://mirror.nju.edu.cn/voidlinux/|Asia|China|2"
-		[quantum - mirror.hu]="https://quantum-mirror.hu/mirrors/pub/voidlinux/|Europe|Hungary|2"
-		[void.cijber.net]="https://void.cijber.net/|Europe/|Amsterdam, Netherlands|2"
-		[mirror.puzzle.ch]="https://mirror.puzzle.ch/voidlinux/|Europe|Bern, Switzerland|2"
-		[mirrors.dotsrc.org]="https://mirrors.dotsrc.org/voidlinux/|Europe|Denmark|2"
 		[mirrors.bfsu.edu.cn]="https://mirrors.bfsu.edu.cn/voidlinux/|Asia|Beijing, China|2"
-		[void.sakamoto.pl]="https://void.sakamoto.pl/|Europe|Warsaw, Poland|2"
-		[mirrors.cnnic.cn]="https://mirrors.cnnic.cn/voidlinux/|Asia|Beijing, China|2"
-		[mirror.vofr.net]="https://mirror.vofr.net/voidlinux/|North America|California, USA|2"
-		[mirror.aarnet.edu.au]="https://mirror.aarnet.edu.aupub/voidlinux/|Oceania|Canberra, Australia|2"
-		[mirror.ps.kz]="https://mirror.ps.kz/voidlinux/|Asia|Almaty, Kazakhstan|2"
-		[voidlinux.mirror.garr.it]="https://voidlinux.mirror.garr.it/|Europe|Italy|2"
-		[mirror2.sandyriver.net]="https://mirror2.sandyriver.net/pub/voidlinux/|North America|Kentucky, USA|2"
-		[mirror.accum.se]="https://mirror.accum.se/mirror/voidlinux/|Europe|Sweden|2"
 		[mirrors.tuna.tsinghua.edu.cn]="https://mirrors.tuna.tsinghua.edu.cn/voidlinux/|Asia|Beijing, China|2"
+		[mirror.mmdbalkhi.ir]="https://mirror.mmdbalkhi.ir/void/|Asia|Tehran, Iran|2"
+		[mirrors.kubarcloud.net]="https://mirrors.kubarcloud.net/voidlinux/|Asia|Tehran, Iran|2"
+		[repo.jing.rocks]="https://repo.jing.rocks/voidlinux/|Asia|Tokyo, Japan|2"
+		[mirror.freedif.org]="https://mirror.freedif.org/voidlinux/|Asia|Singapore|2"
+		[mirror.heigou.pe.kr]="https://mirror.heigou.pe.kr/voidlinux/|Asia|South Korea|2"
+		[mirror.meowsmp.net]="https://mirror.meowsmp.net/voidlinux/|Asia|Hanoi, Vietnam|2"
+		[ftp.dk.xemacs.org]="http://ftp.dk.xemacs.org/voidlinux/|Europe|Denmark|2"
+		[mirrors.dotsrc.org]="https://mirrors.dotsrc.org/voidlinux/|Europe|Denmark|2"
+		[ftp.cc.uoc.gr]="https://ftp.cc.uoc.gr/mirrors/linux/voidlinux/|Europe|Greece|2"
+		[voidlinux.mirror.garr.it]="https://voidlinux.mirror.garr.it/|Europe|Italy|2"
+		[void.sakamoto.pl]="https://void.sakamoto.pl/|Europe|Warsaw, Poland|2"
+		[ftp.debian.ru]="http://ftp.debian.ru/mirrors/voidlinux/|Europe|Russia|2"
+		[mirror.yandex.ru]="https://mirror.yandex.ru/mirrors/voidlinux/|Europe|Russia|2"
+		[ftp.lysator.liu.se]="https://ftp.lysator.liu.se/pub/voidlinux/|Europe|Sweden|2"
+		[mirror.accum.se]="https://mirror.accum.se/mirror/voidlinux/|Europe|Sweden|2"
+		[mirror.puzzle.ch]="https://mirror.puzzle.ch/voidlinux/|Europe|Bern, Switzerland|2"
+		[mirror.vofr.net]="https://mirror.vofr.net/voidlinux/|North America|Virginia, USA|2"
+		[mirrors.lug.mtu.edu]="https://mirrors.lug.mtu.edu/voidlinux/|North America|Michigan, USA|2"
+		[mirror.aarnet.edu.au]="https://mirror.aarnet.edu.au/pub/voidlinux/|Oceania|Canberra, Australia|2"
+		[void.voidbr.org]="https://void.voidbr.org/voidlinux/|South and Central America|M. do Paranapanema, Brazil|2"
+		[void.voidlinux.com.br]="https://void.voidlinux.com.br/voidlinux/|South and Central America|Cacoal/RO, Brazil|2"
+		[mirror.linux.ec]="https://mirror.linux.ec/voidlinux/|South and Central America|Quito, Ecuador|2"
+    #extra
+		[void.chililinux.com]="https://void.chililinux.com/voidlinux/|South and Central America|Pimenta Bueno/RO, Brazil|2"
 	)
 
 	while true; do
@@ -3586,22 +3741,28 @@ $(printf "%${nlen}s$sep%-4s$sep%-6s$sep%6s$sep%-6s$sep%-15s$sep%-30s" "DEVICE" "
 			LGRUB=true
 		fi
 
+    set_disk_choosed() {
+  	  AConfDisk[_DEVICE]="$sd"
+	  	AConfDisk[_BOOTLOADER]="$sd"
+  		sh_checkdisk "$sd"
+	  	sh_backup_partitions "$sd" "$NAME_ORIGEM"
+		  LDISK=true
+  		LGRUB=true
+	  	LOSPROBER=false
+		  sh_rebuild_amntpoint_for_new_disk
+    }
+
 		case $exit_status in
 		"$D_OK")
-			AConfDisk[_DEVICE]="$sd"
-			AConfDisk[_BOOTLOADER]="$sd"
-			sh_checkdisk "$sd"
-			sh_backup_partitions "$sd" "$NAME_ORIGEM"
-			LDISK=true
-			LGRUB=true
-			LOSPROBER=false
-			sh_rebuild_amntpoint_for_new_disk
-			return 0
+      set_disk_choosed
+      return 0
 			;;
 		"$D_CONFIG")
 			sh_checkdisk "${AConfDisk[_DEVICE]}"
 			sh_menuUtilDisk
-			continue
+			#continue
+      set_disk_choosed  # qui 07 mai 2026 21:22:11 -04
+      return 0          # qui 07 mai 2026 21:22:11 -04
 			;;
 		esac
 	done
@@ -3992,6 +4153,7 @@ sh_parseconf() {
 	[[ -n "${AConfMirror[_MIRROR]}" && -n "$url_mirror" ]] && LMIRROR=true
 	[[ -n "${AConfMirror[_SOURCE]}" ]] && LSOURCE=true
 	[[ -n "${AConfAudio[_AUDIOSERVER]}" ]] && LAUDIO=true
+	[[ -n "${AConfKernel[_KERNEL]}" ]] && LKERNEL=true
 	[[ -n "${Amntpoint[*]}" ]] && LPARTITION=true
 	[[ -n ${_WINDOWMANAGER[*]} ]] && LWM=true
 	[[ -n ${_DISPLAYMANAGER} ]] && LDM=true
@@ -4028,7 +4190,7 @@ sh_choose_wm() {
 	local x
 
 	if [[ "${AConfMirror[_SOURCE]}" = "local" ]]; then
-		alerta "$ccabec" "Instalação escolhida foi via local/ISO, não é necessário alterar nada aqui"
+		alerta "=== ${cmsg_Wm^^} ===" "$(gettext 'Instalação escolhida foi via local/ISO, não é necessário alterar nada aqui.')"
 		_WINDOWMANAGER='tty'
 		LWM=true
 		return
@@ -4105,31 +4267,27 @@ sh_choose_wm() {
 	esac
 
 	HYPRLAND=false
-	if conf "=== ${cmsg_Wm^^} ===" \
-		"\n${BOLD}${WHITE}$(gettext "Uma instalação customizada irá instalar pacotes extras e também")" \
-		"\n$(gettext "fazer diversas configurações, evitando faze-las manualmente posteriormente.")\n" \
-		"\n${BOLD}${RED}$(gettext "Customizar a instalação?")\n\n"; then
-		LCUSTOM=true
-	else
-		LCUSTOM=false
-	fi
+  set_custom_install "=== ${cmsg_Wm^^} ==="
 
 	LWM=true
 	_WINDOWMANAGER=($(strtoarray "$wm"))
 	ALLOWED=(tty server xorg)
-	ok=true
+	LSERVER=false
+  LONLY_TTY=true
+	lonly_tty=true
+
 	for wm in "${_WINDOWMANAGER[@]}"; do
 		case "$wm" in
 		tty | xorg) ;;
 		server) LSERVER=true ;;
 		*)
-			ok=false
+			lonly_tty=false
 			break
 			;;
 		esac
 	done
 
-	if $ok; then
+	if $lonly_tty; then
 		LONLY_TTY=true
 		AConfAudio[_AUDIOSERVER]="None"
 		_DISPLAYMANAGER="None"
@@ -4161,6 +4319,7 @@ sh_choose_wm() {
 			sh_configure_dhcpcd_static_ip_dialog
 		fi
 	fi
+  #debug "LONLY_TTY=$LONLY_TTY"
 }
 
 get_default_iface() {
@@ -4928,9 +5087,9 @@ sh_install() {
 	local user="${AsUser[cuser]}"
 	local start_datetime
 	local end_datetime
-	local akernel=(linux)
+	local akernel=("${AConfKernel[_KERNEL]:-linux}" dracut)
 	local afirmware=(wifi-firmware)
-	local abase=(gettext voidbr-base-config chrony wireless_tools wpa_supplicant pigz zstd xz sed grep socklog socklog-void) #voidbr-plymouth-theme
+	local abase=(bash-completion voidbr-base-config fzf voidbr-vinstall voidbr-utils chili-utils exa gettext chrony wireless_tools wpa_supplicant pigz zstd xz sed grep socklog socklog-void) #voidbr-plymouth-theme
 	local agrub=(grub-i386-efi grub-utils grub-terminus grub-btrfs-runit voidbr-grub-theme)
 
 	if $LVM; then
@@ -4986,11 +5145,12 @@ sh_install() {
 
 			# Go install
 			sh_chroot_job "${cmsg_Atualizando} xbps" "LC_ALL=C xbps-install --sync --update xbps --yes"
-			sh_chroot_job "${cmsg_AtualizandoRepositorio}" "LC_ALL=C xbps-install --sync --update --yes"
-
-			if [[ "${AConfMirror[_SOURCE]}" = "local" ]]; then
-				sh_install_pkgs_in_chroot "$(gettext 'Atualizando Pacotes Base')" "${agrub[*]}"
+      if [[ "${AConfMirror[_SOURCE]}" = "local" && "${LCUSTOM:-}" = "false" ]]; then
+  			#sh_chroot_job "${cmsg_AtualizandoRepositorio}" "LC_ALL=C xbps-install --sync --update --yes"
+				sh_install_pkgs_in_chroot "$(gettext 'Instalando') GRUB" "${agrub[*]}"
+				sh_install_pkgs_in_chroot "$(gettext 'Atualizando Pacotes Base')" "${abase[*]}"
 			else
+  			sh_chroot_job "${cmsg_AtualizandoRepositorio}" "LC_ALL=C xbps-install --sync --update --yes"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Kernel')" "${akernel[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando') GRUB" "${agrub[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Atualizando Pacotes Base')" "${abase[*]}"
@@ -4999,7 +5159,7 @@ sh_install() {
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Editores Texto Gráfico ')" "${aEditorX[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Editores texto')" "${aEditorTxt[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Downloaders')" "${aDownloader[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Utilitário')" "${aUtility[*]}"
+				sh_install_pkgs_in_chroot "$(gettext 'Instalando Utilitários')" "${aUtility[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Archiver tty')" "${aArchiverTty[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Extras')" "${aExtra[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Suplementos')" "${aSuplemento[*]}"
@@ -5008,9 +5168,14 @@ sh_install() {
 			sh_grubInstall
 			sh_make_fstab
 
+			#debug $LONLY_TTY
 			if ! $LONLY_TTY; then
 				sh_update_Xkeymap
-				sh_X11_minimal
+        if [[ "${AConfMirror[_SOURCE]}" = "local" && "${LCUSTOM:-}" = "false" ]]; then
+          :
+        else
+  				sh_X11_minimal
+	      fi
 			fi
 
 			aDE=()
@@ -5018,6 +5183,11 @@ sh_install() {
 				aDE+=("$x")
 				case "$x" in
 				"tty") : ;;
+				"local")
+				  if $LCUSTOM; then
+				    sh_xfce4_minimal
+          fi
+				  ;;
 				"server") sh_server_minimal ;;
 				"xorg") sh_xorg_minimal ;;
 				"awesome") sh_awesome_minimal ;;
@@ -5075,7 +5245,7 @@ sh_install() {
 				fi
 			fi
 
-			sh_chroot_job "$(gettext 'Validando configuração para finalizar em:') $dir_install" "
+			sh_chroot_job "$(gettext 'Validando configuração para FINALIZAR em:') $dir_install" "
                 xbps-reconfigure --force glibc-locales
                 xbps-reconfigure --force --all
             "
@@ -5092,6 +5262,7 @@ sh_install() {
 			sh_chmod_tmp
 			sh_umount_fs
 			end_datetime=$(date)
+
 			alerta "$APP" "${cmsg_FinalizadaComSucesso}\n" \
 				"Start Date time  : $start_datetime" \
 				"Finish Date Time : $end_datetime" \
@@ -5414,6 +5585,7 @@ sh_choosePartition() {
 		done
 		((nlen += 6))
 		part=$(${DIALOG} \
+      --defaultno \
 			--default-item "${AConfDisk[_DEVICE]}" \
 			--backtitle "$ccabec" \
 			--title "${cmsg_TitleFileSystem}" \
@@ -5435,7 +5607,6 @@ $(printf "%${nlen}s$sep%-11s$sep%6s$sep%-20s$sep%-20s$sep%-20s$sep%-8s$sep%s" \
 			24 0 2 "${array[@]}" 2>&1 >/dev/tty)
 
 		exit_status=$?
-		#    	dsk="${part%%?(p)+([0-9])}"
 		dsk="${part%%[p0-9]*([0-9])}"
 
 		case $exit_status in
@@ -5477,18 +5648,26 @@ $(printf "%${nlen}s$sep%-11s$sep%6s$sep%-20s$sep%-20s$sep%-20s$sep%-8s$sep%s" \
 				--colors \
 				--title "$xtitle" \
 				--backtitle "$ccabec" \
-				--inputbox "Please specify the mount point for $part:" 8 75 "$oldmntpoint" 2>&1 >/dev/tty)
+				--inputbox "$(gettext 'Por favor, especifique o ponto de montagem para') \n${CYAN}$part${RESET} -> $newfstype" 8 75 "$oldmntpoint" 2>&1 >/dev/tty)
 			exit_status=$?
 			if [[ $exit_status -eq 1 ]]; then
 				continue
 			elif [[ "$mntpoint" = "/usr" ]]; then
 				${DIALOG} \
 					--colors \
-					--msgbox "${BOLD}${RED}ERROR:${RESET} /usr mount point has been configured but is not supported, please remove it to continue." \
+					--msgbox "${BOLD}${RED}ERROR:${CYAN} /usr ${RESET}$(gettext 'esse ponto de montagem não é suportado. Altere e tente novamente.') ex.: ${CYAN}/ ${RESET}para raiz, ${CYAN}/home${RESET}" \
 					8 75
 				continue
 			elif [[ "$mntpoint" = "/" ]]; then
-				AConfDisk[_FILESYSTEM]="$newfstype"
+  			if [[ "$newfstype" = "ntfs" ]]; then
+  				${DIALOG} \
+	  				--colors \
+		  			--msgbox "${BOLD}${RED}ERROR:${CYAN} FS ntfs ${RESET}$(gettext 'ponto de montagem raiz nao pode ser NFTS. Altere e tente novamente.')" \
+			  		8 75
+  				continue
+   				AConfDisk[_FILESYSTEM]="$oldfstype"
+        fi
+ 				AConfDisk[_FILESYSTEM]="$newfstype"
 			elif [[ -z "$mntpoint" ]]; then
 				unset 'Amntpoint["$part"]'
 				continue
@@ -5505,7 +5684,7 @@ $(printf "%${nlen}s$sep%-11s$sep%6s$sep%-20s$sep%-20s$sep%-20s$sep%-8s$sep%s" \
 			--no-label "${cmsg_nolabel}" \
 			--yesno "Filesystem original : ${BLUE}$oldfstype${RESET}\n
 New filesystem      : ${RED}$newfstype${RESET}\n\n
-$(gettext "Você deseja criar um novo sistema de arquivos em") $part?" 8 75
+$(gettext "Criar um novo sistema de arquivos em") $part?" 8 75
 		exit_status=$?
 		if [ $exit_status -eq 0 ]; then
 			fsformat=1
@@ -5664,22 +5843,23 @@ sh_main_menu() {
 		fi
 
 		ccabec="${baseccabec} - ${RED}${url_mirror}"
-		$LMIRROR && MENU_MIRROR="${YELLOW}[${AConfMirror[_MIRROR]}]${RST} ● " || MENU_MIRROR="${RED}[not defined]${RST} ● "
-		$LSOURCE && MENU_SOURCE="${YELLOW}[${AConfMirror[_SOURCE]}]${RST} ● " || MENU_SOURCE="${RED}[not defined]${RST} ● "
-		$LDISK && MENU_DEVICE="${YELLOW}[${AConfDisk[_DEVICE]}]${RST} ● " || MENU_DEVICE="${RED}[not defined]${RST} ● "
-		$LGRUB && MENU_BOOTLOADER="${YELLOW}[${AConfDisk[_BOOTLOADER]}]${RST} ● " || MENU_BOOTLOADER="${RED}[not defined]${RST} ● "
-		$LMKPARTED && MENU_FS="${YELLOW}[OK => revise! ]${RST} ● " || MENU_FS="${RED}[not defined]${RST} ● "
-		$LKEYMAP && MENU_KEYMAP="${YELLOW}[${AConfLocale[_KEYMAP]}]${RST} ● " || MENU_KEYMAP="${RED}[not defined]${RST} ● "
-		$LTIMEZONE && MENU_TIMEZONE="${YELLOW}[${AConfLocale[_TIMEZONE]}${RST} ● " || MENU_TIMEZONE="${RED}[not defined]${RST} ● "
-		$LLOCALE && MENU_LOCALE="${YELLOW}[${AConfLocale[_LOCALE]} ${AConfLocale[_REGION]}]${RST} ● " || MENU_LOCALE="${RED}[not defined]${RST} ● "
+		$LMIRROR && MENU_MIRROR="${YELLOW}[${AConfMirror[_MIRROR]}]${RST} ● " || MENU_MIRROR="${RED}[${cmsg_Nao_definido}]${RST} ● "
+		$LSOURCE && MENU_SOURCE="${YELLOW}[${AConfMirror[_SOURCE]}]${RST} ● " || MENU_SOURCE="${RED}[${cmsg_Nao_definido}]${RST} ● "
+		$LDISK && MENU_DEVICE="${YELLOW}[${AConfDisk[_DEVICE]}]${RST} ● " || MENU_DEVICE="${RED}[${cmsg_Nao_definido}]${RST} ● "
+		$LGRUB && MENU_BOOTLOADER="${YELLOW}[${AConfDisk[_BOOTLOADER]}]${RST} ● " || MENU_BOOTLOADER="${RED}[${cmsg_Nao_definido}]${RST} ● "
+		$LMKPARTED && MENU_FS="${YELLOW}[${RED}OK${YELLOW} => revise! ]${RST} ● " || MENU_FS="${RED}[${cmsg_Nao_definido}]${RST} ● "
+		$LKEYMAP && MENU_KEYMAP="${YELLOW}[${AConfLocale[_KEYMAP]}]${RST} ● " || MENU_KEYMAP="${RED}[${cmsg_Nao_definido}]${RST} ● "
+		$LTIMEZONE && MENU_TIMEZONE="${YELLOW}[${AConfLocale[_TIMEZONE]}${RST} ● " || MENU_TIMEZONE="${RED}[${cmsg_Nao_definido}]${RST} ● "
+		$LLOCALE && MENU_LOCALE="${YELLOW}[${AConfLocale[_LOCALE]} ${AConfLocale[_REGION]}]${RST} ● " || MENU_LOCALE="${RED}[${cmsg_Nao_definido}]${RST} ● "
 		$LAUDIO && MENU_AUDIO="${YELLOW}[${AConfAudio[_AUDIOSERVER]}]${RST} ● " ||
-			{ $LONLY_TTY && MENU_AUDIO="${YELLOW}[${AConfAudio[_AUDIOSERVER]}]${RST} ● " || MENU_AUDIO="${RED}[not defined]${RST} ● "; }
+			{ $LONLY_TTY && MENU_AUDIO="${YELLOW}[${AConfAudio[_AUDIOSERVER]}]${RST} ● " || MENU_AUDIO="${RED}[${cmsg_Nao_definido}]${RST} ● "; }
 		$LCUSTOM && MENU_CUSTOM="CUSTOM" || MENU_CUSTOM=""
-		$LWM && MENU_WM="${YELLOW}[${_WINDOWMANAGER[*]} ${MENU_CUSTOM}]${RST} ● " || MENU_WM="${RED}[not defined]${RST} ● "
-		#		$LDM && MENU_DM="${YELLOW}[${_DISPLAYMANAGER}]${RST} ● " || MENU_DM="${RED}[not defined]${RST} ● "
-		$LDM && MENU_DM="${YELLOW}[${_DISPLAYMANAGER}]${RST} ● " || MENU_DM="${RED}[not defined]${RST} ● "
-		#			{ $LONLY_TTY && MENU_DM="${YELLOW}[${_DISPLAYMANAGER}]${RST} ● " || MENU_DM="${RED}[not defined]${RST} ● "; }
-		$LEXTRA && MENU_EXTRA="${YELLOW}[OK]${RST} ● " || MENU_EXTRA="${RED}[not defined]${RST} ● "
+		$LWM && MENU_WM="${YELLOW}[${_WINDOWMANAGER[*]} ${MENU_CUSTOM}]${RST} ● " || MENU_WM="${RED}[${cmsg_Nao_definido}]${RST} ● "
+		#		$LDM && MENU_DM="${YELLOW}[${_DISPLAYMANAGER}]${RST} ● " || MENU_DM="${RED}[${cmsg_Nao_definido}]${RST} ● "
+		$LDM && MENU_DM="${YELLOW}[${_DISPLAYMANAGER}]${RST} ● " || MENU_DM="${RED}[${cmsg_Nao_definido}]${RST} ● "
+		#			{ $LONLY_TTY && MENU_DM="${YELLOW}[${_DISPLAYMANAGER}]${RST} ● " || MENU_DM="${RED}[${cmsg_Nao_definido}]${RST} ● "; }
+		$LEXTRA && MENU_EXTRA="${YELLOW}[OK]${RST} ● " || MENU_EXTRA="${RED}[${cmsg_Nao_definido}]${RST} ● "
+		$LKERNEL && MENU_KERNEL="${YELLOW}[${AConfKernel[_KERNEL]}${RST} ● " || MENU_KERNEL="${RED}[${cmsg_Nao_definido}]${RST} ● "
 
 		menu=$(${DIALOG} \
 			--backtitle "$ccabec" \
@@ -5700,18 +5880,19 @@ sh_main_menu() {
 			"${cmsg_Teclado}" "${MENU_KEYMAP}${cmsg_descTeclado}" \
 			"Timezone" "${MENU_TIMEZONE}${cmsg_descTimezone}" \
 			"Locale" "${MENU_LOCALE}${cmsg_descLocale}" \
+			"Kernel" "${MENU_KERNEL}${cmsg_descKernel}" \
 			"Wm" "${MENU_WM}${cmsg_descWm}" \
 			"Dm" "${MENU_DM}${cmsg_descDm}" \
 			"Audio" "${MENU_AUDIO}${cmsg_DefinirAudioServer}" \
 			"${cmsg_Usuario}" "${MENU_EXTRA}${cmsg_descExtra}" \
 			"${cmsg_Instalar}" "${cmsg_descInstalar}" \
 			'↑↓' '↓↑' \
-			"${cmsg_Tema}" "$(gettext 'Seletor de temas do dialog (opcional)')" \
-			"${cmsg_Servicos}" "${cmsg_utilvoidservices}" \
-			"Clonedisk" "$(gettext 'Utilitário para clonar discos (opcional)')" \
 			"Fde" "$(gettext 'Criptografia de disco completo + LVM (opcional)')" \
 			"Lvm" "$(gettext 'Gerenciamento de Volume Lógico LVM (opcional)')" \
 			"Vg" "Delete/Clear Volume Group (VG) from LVM (optional)" \
+			"${cmsg_Tema}" "$(gettext 'Seletor de temas do dialog (opcional)')" \
+			"${cmsg_Servicos}" "${cmsg_utilvoidservices}" \
+			"Clonedisk" "$(gettext 'Utilitário para clonar discos (opcional)')" \
 			"Wifi" "${cmsg_descWifi}" \
 			"${cmsg_Sair}" "${cmsg_descSair}" 2>&1 >/dev/tty)
 
@@ -5728,8 +5909,9 @@ sh_main_menu() {
 		"${cmsg_BootLoader}") sh_setBootLoader && [ -n "$LGRUB" ] && DEFITEM="FileSystem" ;;
 		"FileSystem") sh_choosePartition && [ -n "$LPARTITION" ] && DEFITEM="${cmsg_Teclado}" ;;
 		"${cmsg_Teclado}") sh_chooseKeymap && [ -n "$LKEYMAP" ] && DEFITEM="Timezone" ;;
-		"Timezone") sh_chooseTimezone && [ -n "$LTIMEZONE" ] && DEFITEM="Wm" ;;
-		"Locale") sh_chooseLocale && [ -n "$LTIMEZONE" ] && DEFITEM="Wm" ;;
+		"Timezone") sh_chooseTimezone && [ -n "$LTIMEZONE" ] && DEFITEM="Locale" ;;
+		"Locale") sh_chooseLocale && [ -n "$LLOCALE" ] && DEFITEM="Kernel" ;;
+		"Kernel") sh_choose_kernel && [ -n "$LKERNEL" ] && DEFITEM="Wm" ;;
 		"Wm") sh_choose_wm && [ -n "$LWM" ] && DEFITEM="Dm" ;;
 		"Dm") sh_choose_dm && [ -n "$LDM" ] && DEFITEM="Audio" ;;
 		"Audio") sh_choose_audioserver "$@" && [ -n "$LAUDIO" ] && DEFITEM="${cmsg_Usuario}" ;;
@@ -6281,9 +6463,14 @@ sh_setLanguage() {
 	cmsg_DesejaCriarParticaoSwap=$(gettext "Deseja criar partição de swap ?")
 	cmsg_AcompanheInstalacao=$(gettext "Acompanhe a evolução da instalação            ")
 	cmsg_OuPeloTerminal=$(gettext "e/ou pelo terminal tty8        ")
-	cmsg_PacotesDaImagemIso=$(gettext "Utilizar os pacotes da imagem ISO")
+	cmsg_PacotesDaImagemIso=$(gettext "Utilizar os pacotes da imagem ISO (clonar ISO)")
 	cmsg_BaixadoDoRepositorioOficial=$(gettext "Utilizar tarball base e atualizar pela internet (qualquer host Linux)")
 	cmsg_BaixadoDoRepositorioOficialFull=$(gettext "Baixar todos os pacotes da internet (requer host Void Linux)")
+
+  cmsg_PacotesDaImagemIso=$(gettext "Usar os pacotes já presentes na imagem ISO (clonagem da ISO)")
+  cmsg_BaixadoDoRepositorioOficial=$(gettext "Usar tarball base e atualizar via internet (funciona em qualquer host Linux)")
+  cmsg_BaixadoDoRepositorioOficialFull=$(gettext "Baixar todos os pacotes diretamente da internet (requer host Void Linux)")
+
 	cmsg_DefinirInstalacaoDeOrigem=$(gettext "Definir fonte da instalação")
 	cmsg_Definicoes=$(gettext "Definições")
 	cmsg_naodefinido=$(gettext "não definido")
@@ -6307,11 +6494,12 @@ sh_setLanguage() {
 	cmsg_Aceitar=$(gettext "Aceitar")
 	cmsg_Configurar=$(gettext "Configurar")
 	cmsg_Particionar=$(gettext "Particionar")
+	cmsg_Nao_definido=$(gettext "Não definido")
 	cmsg_Mudar=$(gettext "Mudar")
 	cmsg_Sair=$(gettext "Sair")
 	cmsg_Instalar=$(gettext "Instalar")
 	cmsg_Mirror=$(gettext "Espelho")
-	cmsg_BootLoader=$(gettext "Bootloader (GRUB)")
+	cmsg_BootLoader="Bootloader (GRUB)"
 	cmsg_FileSystem=$(gettext "Sistema de Arquivos")
 	cmsg_Disco=$(gettext "Armazenamento")
 	cmsg_Teclado=$(gettext "Teclado")
@@ -6323,6 +6511,7 @@ sh_setLanguage() {
 	cmsg_descBootLoader=$(gettext "Definir bootloader")
 	cmsg_descTeclado=$(gettext "Definir teclado do sistema")
 	cmsg_descTimezone=$(gettext "Definir fuso horário")
+	cmsg_descKernel=$(gettext "Definir kernel")
 	cmsg_descLocale=$(gettext "Definir localidade do sistema")
 	cmsg_descWm=$(gettext "Definir gerenciador de janelas")
 	cmsg_descDm=$(gettext "Definir gerenciador de login")
@@ -6372,7 +6561,7 @@ sh_setLanguage() {
 	cmsg_IniciandoDownload=$(gettext "Iniciando download de")
 	cmsg_CriandoParticoes=$(gettext "Criando partições em")
 	cmsg_CriandoDiretorio=$(gettext "Criando diretório")
-	cmsg_AtualizandoRepositorio=$(gettext "Atualizando repositório")
+	cmsg_AtualizandoRepositorio=$(gettext "Atualizando instalação")
 	cmsg_RemovendoPacotesAntigosObseletos=$(gettext "Removendo pacotes antigos/absoletos")
 	cmsg_InstalandoMetaPacotes=$(gettext "Instalando meta pacote X")
 	cmsg_AtualizandoPacotesBase=$(gettext "Atualizando pacotes base")
@@ -6403,7 +6592,7 @@ sh_setLanguage() {
 	cmsg_ExtraEfi=$(gettext "Detectado boot via EFI ↓ é recomendável instalar EFI ↓")
 	cmsg_ExtraNotEfi=$(gettext "EFI não detectado ↓ é recomendável GPT_BIOS ou MBR_BIOS ↓")
 	cmsg_ExtraIso=$(gettext "Detectado boot via ISO ↓ é recomendável instalar ↓")
-	cmsg_ExtraNotIso=$(gettext "ISO não detectado ↓ é recomendável NETWORK ou NETWORKFULL↓")
+	cmsg_ExtraNotIso=$(gettext "ISO não detectado ↓ é recomendável NETWORK ↓")
 	cmsg_ExtraNotHostVoid=$(gettext "Host VOID não detectado ↓ é recomendável NETWORK↓")
 	welcome=$(gettext "Bem-vindo ao instalador $APP")
 	escolhaIdioma=$(gettext "Escolha o idioma")

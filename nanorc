@@ -171,7 +171,7 @@ set showcursor
 # set stateflags
 
 ## Use this tab size instead of the default; it must be greater than 0.
-set tabsize 3
+set tabsize 2
 #set tabsize 4
 
 ## Convert each typed tab to the fitting number of spaces.
@@ -361,8 +361,7 @@ bind ^/ comment main
 #bind ^/ "sed 's/^.//'" all
 bind ^F "function sh_func_name()" all
 #bind ^/ "^[Oc^[[1;6D^T|sed 's/^.//'" main
-## Trim espaços à esquerda e coloca 2 espaços no início
-bind M-; "^T|sed -E 's/^[[:space:]]+//; s/^/  /'^[u" main
+bind ^D "^[Oc^[[1;6D^T|sed 's/^[ \t]*//'" main
 
 #Lembre-se de que a representação do caractere "Delete" como ^[[3;5~ pode variar dependendo do terminal que você está usando.
 #Se essa representação não funcionar, você pode tentar descobrir a sequência correta de escape para o "Delete" executando o seguinte comando:

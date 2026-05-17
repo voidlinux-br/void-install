@@ -1,71 +1,129 @@
-# void-install - VOID Linux 巴西安装程序
-## 下载：
-- 0 - 使用发行版 VOID
+# void-install — 巴西 Void Linux 安装程序
+
+适用于 VOID Linux 的 VoidBR 社区安装程序，专注于实用性、自动化和现代安装体验。
+
+---
+
+# 安装
+
+## 方法 1 — VoidBR 存储库（推荐）
+
+使用官方 Void Linux ISO：
+
 ```bash
 {
   echo 'repository=https://repo-fastly.voidlinux.org/current'
-  echo 'repository=https://void.chililinux.com/voidlinux/current'
+  echo 'repository=https://void.voidbr.org/voidlinux/current'
+  echo 'repository=https://void.voidbr.org/voidlinux/extra'
 } | sudo tee /etc/xbps.d/00-repository-main.conf
+
 sudo xbps-install -Syu xbps
 sudo xbps-install -Syu libssh2
 sudo xbps-install -Syf void-install
+
 sudo void-install
 ```
 
-- 1 - 使用git
-	- git克隆--深度= 1 https://github.com/voidlinuxbr/void-install
+---
 
-- 2 - 使用curl/wget stdin
-	- bash <(curl -s -L https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh)
-	- bash <(wget -q -O - https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh)
-	- 卷曲-s -O https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh |巴什
-	- wget -q -O - https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh | wget -q -O - https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh |巴什
+## 方法 2——Git
 
-- 3 - 使用curl/wget
-	- 卷曲-O https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh
-	- wget https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh
-	- chmod +x install.sh
-	- bash安装.sh
+```bash
+git clone --depth=1 https://github.com/voidlinuxbr/void-install
+cd void-install
 
-## 安装（下载后）：
-- 1 - 使用make
-	- 须藤进行安装
+sudo make install
+```
 
-- 2 - 在本地存储库中运行
-	- ./void-安装
+本地运行，无需安装：
 
-示例
----------
+```bash
+./void-install
+```
 
-运行不带任何参数的“void-install”来获取帮助。
+---
 
-<img alt="void-install-help" src="assets/void-install-help.jpg" width="600" />
+## 方法3——通过curl/wget快速安装
 
-**注意：** 实际运行安装程序需要 `sudo` 或升级权限。
+### 卷曲
 
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh)
+```
 
+### 获取
 
-<img alt="01" src="assets/01.png" width="600" />
-<img alt="02" src="assets/02.png" width="600" />
-<img alt="03" src="assets/03.png" width="600" />
-<img alt="04" src="assets/04.png" width="600" />
-<img alt="05" src="assets/05.png" width="600" />
-<img alt="06" src="assets/06.png" width="600" />
-<img alt="07" src="assets/07.png" width="600" />
-<img alt="08" src="assets/08.png" width="600" />
-<img alt="09" src="assets/09.png" width="600" />
-<img alt="10" src="assets/10.png" width="600" />
-<img alt="11" src="assets/11.png" width="600" />
-<img alt="12" src="assets/12.png" width="600" />
-<img alt="13" src="assets/13.png" width="600" />
-<img alt="14" src="assets/14.png" width="600" />
-<img alt="15" src="assets/15.png" width="600" />
-<img alt="16" src="assets/16.png" width="600" />
-<img alt="17" src="assets/17.png" width="600" />
-<img alt="18" src="assets/18.png" width="600" />
-<img alt="19" src="assets/19.png" width="600" />
-<img alt="20" src="assets/20.png" width="600" />
-<img alt="21" src="assets/21.png" width="600" />
-<img alt="22" src="assets/22.png" width="600" />
-<img alt="23" src="assets/23.png" width="600" />
-<img alt="24" src="assets/24.png" width="600" />
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh)
+```
+
+---
+
+## Método 4 — 下载手册 do 脚本
+
+### 卷曲
+
+```bash
+curl -O https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh
+```
+
+### 获取
+
+```bash
+wget https://raw.githubusercontent.com/voidlinuxbr/void-install/master/install.sh
+```
+
+然后运行：
+
+```bash
+chmod +x install.sh
+bash install.sh
+```
+
+---
+
+# 使用
+
+启动安装程序：
+
+```bash
+sudo void-install
+```
+
+> 需要 `sudo` 或提升的权限来执行系统安装。
+
+---
+
+# 截图
+
+<img alt="01" src="assets/01.png" width="700" />
+<img alt="02" src="assets/02.png" width="700" />
+<img alt="03" src="assets/03.png" width="700" />
+<img alt="04" src="assets/04.png" width="700" />
+<img alt="05" src="assets/05.png" width="700" />
+<img alt="06" src="assets/06.png" width="700" />
+<img alt="07" src="assets/07.png" width="700" />
+<img alt="08" src="assets/08.png" width="700" />
+<img alt="09" src="assets/09.png" width="700" />
+<img alt="10" src="assets/10.png" width="700" />
+<img alt="11" src="assets/11.png" width="700" />
+<img alt="12" src="assets/12.png" width="700" />
+<img alt="13" src="assets/13.png" width="700" />
+<img alt="14" src="assets/14.png" width="700" />
+<img alt="15" src="assets/15.png" width="700" />
+<img alt="16" src="assets/16.png" width="700" />
+<img alt="17" src="assets/17.png" width="700" />
+<img alt="18" src="assets/18.png" width="700" />
+<img alt="19" src="assets/19.png" width="700" />
+<img alt="20" src="assets/20.png" width="700" />
+<img alt="21" src="assets/21.png" width="700" />
+<img alt="22" src="assets/22.png" width="700" />
+<img alt="23" src="assets/23.png" width="700" />
+<img alt="24" src="assets/24.png" width="700" />
+
+---
+
+# 项目
+
+GitHub：
+辣椒_REF_0_辣椒
