@@ -1,0 +1,1 @@
+sudo lsblk -fPAo PTTYPE,TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,FSTYPE,PARTTYPENAME,PARTLABEL "$1" |       grep -P 'TYPE="(part)"' |       sort -k5,5 -k2,2

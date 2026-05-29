@@ -269,6 +269,7 @@ include "/usr/share/nano/asm.nanorc"
 include "/usr/share/nano/lua.nanorc"
 include "/usr/share/nano/yaml.nanorc"
 include "/usr/share/nano/sh.nanorc"
+include "/usr/share/nano/c.nanorc"
 
 ## In /usr/share/nano/extra/ you can find some syntaxes that are
 ## specific for certain distros or for some less common languages.

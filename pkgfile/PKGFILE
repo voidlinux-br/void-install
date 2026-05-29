@@ -28,6 +28,7 @@ package() {
 
    # Install binary
    install -Dm755 ${_pkgsrc}/void-install "${pkgdir}/usr/bin/void-install"
+   install -Dm755 ${_pkgsrc}/void-install "${pkgdir}/usr/bin/voidbr-install"
 
    # Install license file if present
    if [ -f "LICENSE" ]; then
