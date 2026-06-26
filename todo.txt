@@ -1,8 +1,0 @@
-# - mkfs.ntfs     - dependencia
-# - msg no filesytem disco virgem
-- ntfs no particionamento
-- escolha de pacotes
-- poweroff/reboot
-
-
-
