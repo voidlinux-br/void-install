@@ -1,4 +1,3 @@
-#!/usr/bin/bash
 # Maintainer  : Vilmar Catafesta <vcatafesta@gmail.com>
 
 pkgname=void-install
@@ -13,6 +12,7 @@ url="https://github.com/voidlinuxbr/$pkgname"
 source=("git+${url}.git")
 md5sums=('SKIP')
 depends=('bash>=0' gettext dialog pv rsync gawk grep parted curl lvm2 cryptsetup voidbr-utils xz)
+
 package() {
 	local dirs=("usr" "etc" "opt")
 	#   echo "DESTDIR=$DESTDIR"
@@ -27,14 +27,29 @@ package() {
 		fi
 	done
 
-   # Install binary
-   install -Dm755 ${_pkgsrc}/void-install "${pkgdir}/usr/bin/void-install"
-   install -Dm755 ${_pkgsrc}/void-install "${pkgdir}/usr/bin/voidbr-install"
+	# Install binary
+	install -Dm755 ${_pkgsrc}/void-install "${pkgdir}/usr/bin/void-install"
+	install -Dm755 ${_pkgsrc}/void-install "${pkgdir}/usr/bin/voidbr-install"
 
-   # Install license file if present
-   if [ -f "LICENSE" ]; then
-      install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
-   fi
+	# Install license file if present
+	if [ -f "LICENSE" ]; then
+		install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+	fi
 
+}
 
+pre_install() {
+	log "Iniciando instalação"
+}
+
+post_install() {
+	log "Finalizando instalação"
+}
+
+pre_upgrade() {
+	log "Iniciando upgrade"
+}
+
+post_upgrade() {
+	log "Finalizando upgrade"
 }
