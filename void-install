@@ -4,7 +4,7 @@
 #
 #  void-install
 #  Created: 2022/12/24
-#  Updated: qui 06 ago 2026 13:10:06 -04
+#  Updated: ter 18 ago 2026 21:58:52 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -50,7 +50,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.8.06-20260806'
+readonly _VERSION_='3.8.18-20260818'
 declare -g DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr
 	chroot blkid fdisk parted lsblk curl xz tee
 	mkfs.vfat mkfs.xfs mkfs.ntfs mkfs.jfs mkfs.btrfs mkfs.f2fs mkfs.nilfs2
@@ -96,6 +96,7 @@ declare LCUSTOM=false
 declare LAUTOLOGIN=false
 declare LEFI=false
 declare LGRUB=false
+declare LLOADER=true
 declare LDISK=false
 declare LMIRROR=true
 declare LSOURCE=true
@@ -190,6 +191,9 @@ declare -gA AConfAudio=(
 )
 declare -gA AConfKernel=(
 	[_KERNEL]='linux'
+)
+declare -gA AConfBootLoader=(
+	[_LOADER]='grub'
 )
 declare -gA AConfWifi=(
 	[_NETWORK]='wifi_ssid'
@@ -911,6 +915,7 @@ sh_setEnvironment() {
 	: "${LFS=}"
 	: "${LPARTITION=}"
 	: "${LGRUB=}"
+	: "${LLOADER=}"
 	: "${LKEYMAP=}"
 	: "${LWM=}"
 	: "${LDM=}"
@@ -932,7 +937,7 @@ sh_setEnvironment() {
 	GREEN="\Z2"
 	YELLOW="\Z3"
 	BLUE="\Z4"
-	MAGENTA="\Z5"
+  MAGENTA="\Z5"
 	CYAN="\Z6"
 	WHITE="\Z7"
 	BLACK="\Z0"
@@ -992,6 +997,7 @@ sh_touchConf() {
 		declare -p LEFI
 		declare -p LAUDIO
 		declare -p LGRUB
+		declare -p LLOADER
 		declare -p LBIOS
 		declare -p LKERNEL
 		declare -p LMKPARTED
@@ -1010,6 +1016,7 @@ sh_touchConf() {
 		declare -p AConfDisk
 		declare -p AConfAudio
 		declare -p AConfKernel
+    declare -p AConfBootLoader
 		declare -p AConfLocale
 		declare -p AConfMirror
 		declare -p AConfWifi
@@ -2103,6 +2110,7 @@ sh_getPartitionsPercent() {
 		fi
 	done
 
+  [[ ${AsFs[boot]} == vfat ]] && AsFs[boot]="fat32"
 	withhome=true
 	withboot=true
 	withswap=true
@@ -2241,7 +2249,7 @@ sh_mkparted() {
 			#efi
 			((++cnextpart))
 			cini="${cnextini}"
-			cnextini="260MiB"
+			cnextini="512MiB"
 			CSCRIPT+="mkpart primary fat32 ${cini} ${cnextini} set 2 esp       on name 2 EFI  "
 			Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}2"]="/boot/efi|vfat|1")
 			cini="${cnextini}"
@@ -4072,6 +4080,7 @@ sh_choose_kernel() {
 	local current_kernel="${AConfKernel[_KERNEL]:-linux}"
 
 	array+=("linux" "Linux kernel and modules current default" "$([[ $current_kernel == linux ]] && echo on || echo off)")
+	array+=("linux7.2" "Linux kernel and modules (7.2 series) stable" "$([[ $current_kernel == linux7.2 ]] && echo on || echo off)")
 	array+=("linux7.1" "Linux kernel and modules (7.1 series) stable" "$([[ $current_kernel == linux7.1 ]] && echo on || echo off)")
 	array+=("linux7.0" "Linux kernel and modules (7.0 series) stable" "$([[ $current_kernel == linux7.0 ]] && echo on || echo off)")
 	array+=("linux6.19" "Linux kernel and modules (6.19 series) stable" "$([[ $current_kernel == linux6.19 ]] && echo on || echo off)")
@@ -4089,7 +4098,7 @@ sh_choose_kernel() {
 		--cancel-label "${cmsg_ButtonBack}" \
 		--ok-label "${cmsg_Aceitar}" \
 		--radiolist "${cmsg_MENU}\n\n$cextra" \
-		12 70 0 "${array[@]}" 2>&1 >/dev/tty)
+		12 00 0 "${array[@]}" 2>&1 >/dev/tty)
 
 	exit_status=$?
 
@@ -4101,6 +4110,41 @@ sh_choose_kernel() {
 
 	LKERNEL=true
 	AConfKernel[_KERNEL]="$ckernel"
+	return 0
+}
+
+sh_choose_bootloadernew() {
+	local exit_status
+	local array=()
+	local x
+	local cloader
+	local current_loader="${AConfBootLoader[_LOADER]:-grub}"
+
+	array+=("grub" "$(gettext 'GRand Unified Bootloader 2')" "$([[ $current_loader == grub ]] && echo on || echo off)")
+	array+=("limine" "$(gettext 'Modern, secure, portable, multiprotocol bootloader and boot manager')" "$([[ $current_loader == limine ]] && echo on || echo off)")
+
+	cloader=$(${DIALOG} \
+		--title "${cmsg_descBootLoader}" \
+		--default-item "${current_loader}" \
+		--colors \
+		--cancel-label "${cmsg_ButtonBack}" \
+		--ok-label "${cmsg_Aceitar}" \
+		--radiolist "${cmsg_MENU}\n\n$cextra" \
+		12 00 0 "${array[@]}" 2>&1 >/dev/tty)
+
+	exit_status=$?
+
+	case $exit_status in
+	"$D_ESC" | "$D_CANCEL")
+		return 1
+		;;
+	esac
+
+	LLOADER=true
+	AConfBootLoader[_LOADER]="$cloader"
+
+  sh_chooseBootLoader
+
 	return 0
 }
 
@@ -4825,7 +4869,7 @@ sh_chooseTablePartitionAjuda() {
   \Z2$(gettext "GPT_BIOS")\Zn
   $(gettext "Pequena partição especial usada quando o disco é GPT")
   $(gettext "mas o boot ainda utiliza BIOS legado.")
-  $(gettext "Necessária para GRUB em modo BIOS + GPT.")
+  $(gettext "Necessária para o BOOTLOADER em modo BIOS + GPT.")
 
   \Z3$(gettext "MBR")\Zn
   $(gettext "Método antigo de particionamento e boot.")
@@ -4839,7 +4883,7 @@ sh_chooseTablePartitionAjuda() {
   $(gettext "sem necessidade de partição estendida.")
 
   \Z5$(gettext "Importante")\Zn
-  $(gettext "Se a ISO foi iniciada em modo UEFI, o GRUB poderá")
+  $(gettext "Se a ISO foi iniciada em modo UEFI, o BOOTLOADER poderá")
   $(gettext "ser instalado em modo UEFI utilizando EFI + GPT.")
 
   $(gettext "Se a ISO foi iniciada em modo BIOS/Legacy, utilize")
@@ -5061,9 +5105,10 @@ sh_dryrun() {
 	sh_umount_fs
 	sh_mount_fs
 	sh_init_bind
-	sh_hack_hyprland_lib
-	sh_configure_hyprland_audio
 
+  #sh_limineInstall
+	#sh_hack_hyprland_lib
+	#sh_configure_hyprland_audio
 	#sh_update_locale
 	#sh_update_rc_conf
 	#sh_update_rc_local
@@ -5951,6 +5996,53 @@ EOF
 	fi
 }
 
+sh_is_running_hypervisor() {
+  grep -qw hypervisor $dir_install/proc/cpuinfo
+}
+
+sh_limineInstall() {
+  sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
+    mkdir -p /boot/efi/EFI/BOOT
+    mkdir -p /boot/efi/EFI/limine
+    mkdir -p /boot/efi/limine
+    cp -a /usr/share/limine/BOOTX64.EFI /boot/efi/EFI/BOOT/
+    cp -a /usr/share/limine/BOOTX64.EFI /boot/efi/EFI/limine/
+    cp -a /usr/share/limine/limine-bios.sys /boot/efi/limine/
+    rm -rf /boot/EFI
+  "
+
+  if $LBIOS; then
+		sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') i386-pc" "
+      limine bios-install ${AConfDisk[_BOOTLOADER]} 1
+	   "
+	fi
+
+	if $LEFI; then
+    if ! sh_is_running_hypervisor; then
+  		sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
+        efibootmgr -c \
+          -d ${AConfDisk[_BOOTLOADER]} \
+          -p 2 \
+          -L 'Limine' \
+          -l '\EFI\limine\BOOTX64.EFI'
+    	"
+    else
+      vm_user="${SUDO_USER:-$(id -un)}"
+      vm_home=$(getent passwd "$vm_user" | cut -d: -f6)
+      vm_vars="$vm_home/.chili-fr/OVMF_VARS.4m.fd"
+
+      virt-fw-vars \
+        --inplace "$vm_vars" \
+        --append-boot-filepath "$dir_install/boot/efi/EFI/limine/BOOTX64.EFI"
+    fi
+
+		sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
+      update-limine || true
+    "
+	fi
+
+}
+
 confmulti() {
 	xtitle="$1"
 	shift
@@ -6085,9 +6177,9 @@ sh_copy_keys() {
 }
 
 sh_install_prereqs() {
-	#	REQUIRED_PKGS="base-files xbps libgcc dash coreutils sed tar gawk grub-i386-efi grub-x86_64-efi binutils device-mapper dhclient dracut-network openresolv"
-	#	REQUIRED_PKGS="base-container-full xbps libgcc dash coreutils sed tar gawk grub-i386-efi grub-x86_64-efi binutils device-mapper dhclient dracut-network openresolv"
-	#	REQUIRED_PKGS="base-voidstrap xbps libgcc dash coreutils sed tar gawk grub-i386-efi grub-x86_64-efi binutils device-mapper dhclient dracut-network openresolv"
+	#	REQUIRED_PKGS="base-files xbps libgcc dash coreutils sed tar gawk limine grub-i386-efi grub-x86_64-efi binutils device-mapper dhclient dracut-network openresolv"
+	#	REQUIRED_PKGS="base-container-full xbps libgcc dash coreutils sed tar gawk limine grub-i386-efi grub-x86_64-efi binutils device-mapper dhclient dracut-network openresolv"
+	#	REQUIRED_PKGS="base-voidstrap xbps libgcc dash coreutils sed tar gawk limine grub-i386-efi grub-x86_64-efi binutils device-mapper dhclient dracut-network openresolv"
 	REQUIRED_PKGS="base-voidstrap" # xbps tar xz"
 
 	sh_cmd_job "Instalando bootstrap" \
@@ -6265,7 +6357,7 @@ sh_change_accountsservice_user() {
 	local cuser="${AsUser[cuser]}"
 	local f="${dir_install}/var/lib/AccountsService/users/${cuser}"
 
-	sh_cmd_job "$(gettext 'Aplicando ajustes no GRUB')" "
+	sh_cmd_job "$(gettext 'Aplicando ajustes no AccountsService')" "
     mkdir -p "${dir_install}/var/lib/AccountsService/users"
     cat > ${f} << EOF
 [org.freedesktop.DisplayManager.AccountsService]
@@ -6387,12 +6479,18 @@ sh_install() {
 	abase+=(socklog-void)
 	abase+=(fastfetch)
 	#
+
 	agrub+=(dracut)
-	agrub+=(grub-i386-efi)
-	agrub+=(grub-utils)
-	agrub+=(grub-terminus)
-	agrub+=(grub-btrfs-runit)
-	agrub+=(voidbr-grub-theme)
+  if [[ "${AConfBootLoader[_LOADER]}" == 'grub' ]]; then
+  	agrub+=(grub-i386-efi)
+  	agrub+=(grub-utils)
+  	agrub+=(grub-terminus)
+  	agrub+=(grub-btrfs-runit)
+  	agrub+=(voidbr-grub-theme)
+  else
+  	agrub+=(limine)
+  	agrub+=(voidbr-limine-config)
+  fi
 
 	if $LVM; then
 		abase+=(lvm2)
@@ -6419,9 +6517,11 @@ sh_install() {
 
 	if $LEFI; then
 		if sh_getBootEFI; then
-			agrub+=(grub-"$TARGET_EFI")
-			agrub+=(efivar)
-			#			agrub+=(efibootmgr)
+      if [[ "${AConfBootLoader[_LOADER]}" == 'grub' ]]; then
+		  	agrub+=(grub-"$TARGET_EFI")
+      fi
+ 			agrub+=(efivar)
+			agrub+=(efibootmgr)
 		else
 			LEFI=false
 			LBIOS=true
@@ -6456,12 +6556,12 @@ sh_install() {
 			sh_copy_keys # ao remover xbps a chave tamém é removida, recolocando!
 			if [[ "${AConfMirror[_SOURCE]}" = "local" && "${LCUSTOM:-}" = "false" ]]; then
 				#sh_chroot_job "${cmsg_AtualizandoRepositorio}" "LC_ALL=C xbps-install -Syu"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando') GRUB" "${agrub[*]}"
+				sh_install_pkgs_in_chroot "$(gettext 'Instalando') BootLoader" "${agrub[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Atualizando Pacotes Base')" "${abase[*]}"
 			else
 				#				sh_chroot_job "${cmsg_AtualizandoRepositorio}" "LC_ALL=C xbps-install -Syu"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Kernel')" "${akernel[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando') GRUB" "${agrub[*]}"
+				sh_install_pkgs_in_chroot "$(gettext 'Instalando') BootLoader" "${agrub[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Atualizando Pacotes Base')" "${abase[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Wifi Firmware')" "${afirmware[*]}"
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Daemons')" "${aPackageDaemons[*]}"
@@ -6475,7 +6575,12 @@ sh_install() {
 				sh_install_pkgs_in_chroot "$(gettext 'Instalando Pacotes customizados')" "${aCustomPackages[*]}"
 			fi
 
-			sh_grubInstall
+      if [[ "${AConfBootLoader[_LOADER]}" == 'grub' ]]; then
+  			sh_grubInstall
+	    else
+        sh_limineInstall
+	    fi
+
 			sh_make_fstab
 
 			#debug $LONLY_TTY
@@ -7156,7 +7261,8 @@ sh_getparamfile() {
 }
 
 sh_main_menu() {
-	local cOK="${RST}${BOLD}${BLUE}"
+	local cOK="${RST}${BOLD}${GREEN}✓ ${RST}${YELLOW}"
+	local cNOK="${RST}${BOLD}${RED}✗ ${cERRO}[${cmsg_Nao_definido}]${RST} ● "
 	local cWARN="${RST}${YELLOW}"
 	local cERRO="${RST}${UNDERLINE}${BOLD}${RED}"
 
@@ -7169,33 +7275,40 @@ sh_main_menu() {
 		fi
 
 		ccabec="${baseccabec}${BLACK}${url_mirror} "
-		$LMIRROR && MENU_MIRROR="${cWARN}[${AConfMirror[_MIRROR]}]${RST} ● " || MENU_MIRROR="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		$LSOURCE && MENU_SOURCE="${cWARN}[${AConfMirror[_SOURCE]}]${RST} ● " || MENU_SOURCE="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		$LDISK && MENU_DEVICE="${cWARN}[${AConfDisk[_DEVICE]}]${RST} ● " || MENU_DEVICE="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		$LGRUB && MENU_BOOTLOADER="${cWARN}[${AConfDisk[_BOOTLOADER]}]${RST} ● " || MENU_BOOTLOADER="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		#		$LMKPARTED && MENU_FS="${cWARN}[${cERRO}OK${cWARN} => revise! ]${RST} ● " || MENU_FS="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		#		if $LMKPARTED; then
-		#		  if $LFSREVISED; then
-		#  		  MENU_FS="${cWARN}[${cOK}OK${cWARN} => revisado! ]${RST} ● "
-		#	    else
-		#	  	  MENU_FS="${cWARN}[${cERRO}OK${cWARN} => revise! ]${RST} ● "
-		#	  	fi
-		#    else
-		#		  MENU_FS="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		#    fi
-		$LMKPARTED && { $LFSREVISED && MENU_FS="${cWARN}[${cOK}OK${cWARN} => revisado!]${RST} ● " || MENU_FS="${cWARN}[${cERRO}NOK${cWARN} => revise!]${RST} ● "; } || MENU_FS="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		$LKEYMAP && MENU_KEYMAP="${cWARN}[${AConfLocale[_KEYMAP]}]${RST} ● " || MENU_KEYMAP="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		$LTIMEZONE && MENU_TIMEZONE="${cWARN}[${AConfLocale[_TIMEZONE]}${RST} ● " || MENU_TIMEZONE="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		$LLOCALE && MENU_LOCALE="${cWARN}[${AConfLocale[_LOCALE]} ${AConfLocale[_REGION]}]${RST} ● " || MENU_LOCALE="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		$LAUDIO && MENU_AUDIO="${cWARN}[${AConfAudio[_AUDIOSERVER]}]${RST} ● " ||
-			{ $LONLY_TTY && MENU_AUDIO="${cWARN}[${AConfAudio[_AUDIOSERVER]}]${RST} ● " || MENU_AUDIO="${cERRO}[${cmsg_Nao_definido}]${RST} ● "; }
-		$LCUSTOM && MENU_CUSTOM="CUSTOM" || MENU_CUSTOM=""
-		$LWM && MENU_WM="${cWARN}[${_WINDOWMANAGER[*]} ${MENU_CUSTOM}]${RST} ● " || MENU_WM="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		#		$LDM && MENU_DM="${cWARN}[${_DISPLAYMANAGER}]${RST} ● " || MENU_DM="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		$LDM && MENU_DM="${cWARN}[${_DISPLAYMANAGER}]${RST} ● " || MENU_DM="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
+		$LMIRROR && MENU_MIRROR="${cOK}[${AConfMirror[_MIRROR]}]${RST} ● " ||
+		            MENU_MIRROR="${cNOK}"
+		$LSOURCE && MENU_SOURCE="${cOK}[${AConfMirror[_SOURCE]}]${RST} ● " ||
+		            MENU_SOURCE="${cNOK}"
+		$LDISK && MENU_DEVICE="${cOK}[${AConfDisk[_DEVICE]}]${RST} ● " ||
+		          MENU_DEVICE="${cNOK}"
+		$LLOADER && MENU_BOOTLOADER="${cOK}[${AConfBootLoader[_LOADER]}]${RST}" ||
+		            MENU_BOOTLOADER="${cNOK}"
+		$LGRUB && MENU_BOOTLOADER+="/${cOK}[${AConfDisk[_BOOTLOADER]}]${RST} ● " ||
+		          MENU_BOOTLOADER+="/${cERRO}[${cmsg_Nao_definido}]${RST} ● "
+		$LMKPARTED && { $LFSREVISED && MENU_FS="${cOK}[OK => revisado!]${RST} ● " ||
+		                               MENU_FS="${cOK}[${cERRO}NOK${cWARN} => revise!]${RST} ● "; } ||
+		                               MENU_FS="${cNOK}"
+		$LKEYMAP && MENU_KEYMAP="${cOK}[${AConfLocale[_KEYMAP]}]${RST} ● " ||
+		            MENU_KEYMAP="${cNOK}"
+		$LTIMEZONE && MENU_TIMEZONE="${cOK}[${AConfLocale[_TIMEZONE]}]${RST} ● " ||
+		              MENU_TIMEZONE="${cNOK}"
+		$LLOCALE && MENU_LOCALE="${cOK}[${AConfLocale[_LOCALE]} ${AConfLocale[_REGION]}]${RST} ● " ||
+		            MENU_LOCALE="${cNOK}"
+		$LKERNEL && MENU_KERNEL="${cOK}[${AConfKernel[_KERNEL]}]${RST} ● " ||
+		            MENU_KERNEL="${cNOK}"
+
+		$LAUDIO && MENU_AUDIO="${cOK}[${AConfAudio[_AUDIOSERVER]}]${RST} ● " ||
+			{ $LONLY_TTY && MENU_AUDIO="${cOK}[${AConfAudio[_AUDIOSERVER]}]${RST} ● " ||
+			                MENU_AUDIO="${cMOK}"; }
+		$LCUSTOM && MENU_CUSTOM="CUSTOM" ||
+		            MENU_CUSTOM=""
+		$LWM && MENU_WM="${cOK}[${_WINDOWMANAGER[*]} ${MENU_CUSTOM}]${RST} ● " ||
+		        MENU_WM="${cNOK}"
+		$LDM && MENU_DM="${cOK}[${_DISPLAYMANAGER}]${RST} ● " ||
+		        MENU_DM="${cNOK}"
 		#			{ $LONLY_TTY && MENU_DM="${cWARN}[${_DISPLAYMANAGER}]${RST} ● " || MENU_DM="${cERRO}[${cmsg_Nao_definido}]${RST} ● "; }
-		$LEXTRA && MENU_EXTRA="${cWARN}[OK]${RST} ● " || MENU_EXTRA="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-		$LKERNEL && MENU_KERNEL="${cWARN}[${AConfKernel[_KERNEL]}${RST} ● " || MENU_KERNEL="${cERRO}[${cmsg_Nao_definido}]${RST} ● "
+		$LEXTRA && MENU_EXTRA="${cOK}[OK]${RST} ● " ||
+		           MENU_EXTRA="${cNOK}"
 
 		#			"Sistema" "${MENU_KEYMAP}Configurações regionais" \
 		#			"${cmsg_Mirror}" "${MENU_MIRROR}${cmsg_descMirror}" \
@@ -7248,7 +7361,7 @@ sh_main_menu() {
 		"${cmsg_Source}") sh_chooseSource && [ -n "$LSOURCE" ] && DEFITEM="${cmsg_Disco}" ;;
 		"${cmsg_Disco}") sh_choose_disk && [ -n "$LDISK" ] && DEFITEM="FileSystem" ;;
 		"FileSystem") sh_choose_Partition && [ -n "$LPARTITION" ] && DEFITEM="${cmsg_BootLoader}" ;;
-		"${cmsg_BootLoader}") sh_chooseBootLoader && [ -n "$LGRUB" ] && DEFITEM="${cmsg_Teclado}" ;;
+		"${cmsg_BootLoader}") sh_choose_bootloadernew && [ -n "$LGRUB" ] && DEFITEM="${cmsg_Teclado}" ;;
 		"${cmsg_Teclado}") sh_chooseKeymap && [ -n "$LKEYMAP" ] && DEFITEM="Timezone" ;;
 		"Timezone") sh_chooseTimezone && [ -n "$LTIMEZONE" ] && DEFITEM="Locale" ;;
 		"Locale") sh_chooseLocale && [ -n "$LLOCALE" ] && DEFITEM="Kernel" ;;
@@ -7853,7 +7966,7 @@ $cLB7 ${ccolor}↵ ENTER${RESET} ou ${ccolor}BARRA DE ESPAÇO${RESET} $cLB8"
 	cmsg_Testar_Saude_disco=$(gettext "Fazer diagnostico da saúde do disco")
 	cmsg_Instalar=$(gettext "Instalar")
 	cmsg_Mirror=$(gettext "Espelho")
-	cmsg_BootLoader="Bootloader (GRUB)"
+	cmsg_BootLoader="Bootloader"
 	cmsg_DiskHealth="Health disk test"
 	cmsg_FileSystem=$(gettext "Sistema de Arquivos")
 	cmsg_Revised=$(gettext "não foi revisado!")
@@ -7865,10 +7978,11 @@ $cLB7 ${ccolor}↵ ENTER${RESET} ou ${ccolor}BARRA DE ESPAÇO${RESET} $cLB8"
 	cmsg_descMirror=$(gettext "Selecionar espelho dos pacotes")
 	cmsg_descDisco=$(gettext "Selecionar disco e partições")
 	cmsg_descFileSystem=$(gettext "Configurar sistema de arquivos e pontos de montagem")
-	cmsg_descBootLoader=$(gettext "Escolhar disco para o bootloader")
+	cmsg_descBootLoader=$(gettext "Escolher gerenciador e disco para o bootloader")
 	cmsg_descTeclado=$(gettext "Selecionar layout do teclado")
 	cmsg_descTimezone=$(gettext "Selecionar fuso horário")
 	cmsg_descKernel=$(gettext "Selecionar versão do kernel")
+	cmsg_descBootLoader=$(gettext "Selecionar gerenciador/disco de bootloader")
 	cmsg_descLocale=$(gettext "Selecionar localidade do sistema")
 	cmsg_descWm=$(gettext "Selecionar interface gráfico/gerenciador de janelas")
 	cmsg_descDm=$(gettext "Selecionar gerenciador de login")
