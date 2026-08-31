@@ -4,7 +4,7 @@
 #
 #  void-install
 #  Created: 2022/12/24
-#  Updated: ter 18 ago 2026 21:58:52 -04
+#  Updated: dom 30 ago 2026 04:57:54 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -50,7 +50,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.8.18-20260818'
+readonly _VERSION_='3.8.30-20260830'
 declare -g DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr
 	chroot blkid fdisk parted lsblk curl xz tee
 	mkfs.vfat mkfs.xfs mkfs.ntfs mkfs.jfs mkfs.btrfs mkfs.f2fs mkfs.nilfs2
@@ -3696,13 +3696,6 @@ sh_part_info() {
 	#	done < <(lsblk -fPAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,FSTYPE,PARTTYPENAME | grep -P 'TYPE="(part)"' | sort -k5,5 -k2,2)
 }
 
-# ------------------------------------------------------------
-# Verifica possíveis problemas no disco
-# Retorna:
-#   0 = OK
-#   1 = Aviso
-#   2 = Crítico
-# ------------------------------------------------------------
 sh_check_disk_health() {
 	local disk="$1"
 	local msg
@@ -3728,18 +3721,24 @@ sh_check_disk_health() {
 
 	sh_info_msg "$(gettext 'Testando saude do disco'): ${CYAN}${disk}${RESET}"
 
-	local model serial size tran
-	local pttype=""
-	local status=0
+	local model serial size tran pttype=""
+	# Dois status independentes em vez de um único: ESTRUTURA (tabela de
+	# partição, GPT/MBR, blkid, wipefs) e HARDWARE (SMART, dmesg). Um
+	# disco novo/zerado (sem tabela) é aviso de ESTRUTURA, nunca defeito
+	# de HARDWARE — só SMART e dmesg indicam problema físico real. O
+	# valor retornado pela função continua sendo o maior dos dois, para
+	# preservar o contrato 0=ok/1=aviso/2=crítico já usado pelos
+	# chamadores desta função.
+	local st_estrutura=0 st_hardware=0
 	local report=""
 	local errors=""
 	local smart="Não disponível"
 
-	model=$(lsblk -dn -o MODEL "$disk")
-	serial=$(lsblk -dn -o SERIAL "$disk")
-	size=$(lsblk -dn -o SIZE "$disk")
-	tran=$(lsblk -dn -o TRAN "$disk")
-	pttype=$(lsblk -dn -o PTTYPE "$disk")
+	model=$(lsblk -dn -o MODEL "$disk" 2>/dev/null | xargs)
+	serial=$(lsblk -dn -o SERIAL "$disk" 2>/dev/null | xargs)
+	size=$(lsblk -dn -o SIZE "$disk" 2>/dev/null | xargs)
+	tran=$(lsblk -dn -o TRAN "$disk" 2>/dev/null | xargs)
+	pttype=$(lsblk -dn -o PTTYPE "$disk" 2>/dev/null | xargs)
 
 	report+="Disco.............: ${CYAN}$disk${RESET}\n"
 	report+="Modelo............: ${CYAN}${model:-Desconhecido}${RESET}\n"
@@ -3748,119 +3747,282 @@ sh_check_disk_health() {
 	report+="Interface.........: ${CYAN}${tran:-N/A}${RESET}\n\n"
 
 	# --------------------------------------------------------
-	# GPT / MBR
+	# Tabela de Partições (GPT / MBR / DOS)   [categoria: ESTRUTURA]
 	# --------------------------------------------------------
+	# LC_ALL=C força a saída do fdisk em inglês independente do locale
+	# do sistema. O grep antigo procurava "Tipo de rótulo do disco: ..."
+	# (pt_BR), mas o fdisk só imprime nesse idioma se o SISTEMA (não só
+	# este script) estiver de fato em locale pt_BR instalado — em
+	# qualquer outro caso (padrão de live-CD/ISO de instalação, que
+	# tipicamente roda em locale C/POSIX) o grep nunca batia, e um disco
+	# GPT/MBR perfeitamente saudável caía no "else" como "Não detectada"
+	# -> status crítico (falso defeito).
 	if [[ -z "$pttype" ]]; then
-		if fdisk -l "$disk" 2>/dev/null | grep -qi "Tipo de rótulo do disco: gpt"; then
-			report+="Tabela............: ${RED}GPT (lsblk não detectou)${RESET}\n"
-			report+="Aviso.............: ${RED}libblkid falhou ao detectar GPT.${RESET}\n"
-			status=1
+		if LC_ALL=C fdisk -l "$disk" 2>/dev/null | grep -qi "Disklabel type: gpt"; then
+			pttype="gpt"
+			report+="Tabela............: ${YELLOW}GPT (lsblk não detectou)${RESET}\n"
+			report+="Aviso.............: ${YELLOW}libblkid falhou ao detectar GPT; usado fallback via fdisk.${RESET}\n"
+			((st_estrutura < 1)) && st_estrutura=1
+		elif LC_ALL=C fdisk -l "$disk" 2>/dev/null | grep -qi "Disklabel type: dos"; then
+			pttype="dos"
+			report+="Tabela............: ${GREEN}DOS/MBR${RESET}\n"
 		else
-			report+="Tabela............: ${RED}Não detectada${RESET}\n"
-			status=2
+			# Disco sem tabela nenhuma (novo ou recém-zerado) é um
+			# ESTADO, não um defeito de hardware — não deve subir a
+			# status crítico.
+			report+="Tabela............: ${YELLOW}Não detectada (disco sem partições?)${RESET}\n"
+			((st_estrutura < 1)) && st_estrutura=1
 		fi
 	else
-		report+="Tabela............: ${GREEN}$pttype${RESET}\n"
+		report+="Tabela............: ${GREEN}${pttype^^}${RESET}\n"
 	fi
 
 	# --------------------------------------------------------
-	# GPT Primária
+	# Validação de Headers (GPT vs MBR/DOS)   [categoria: ESTRUTURA]
 	# --------------------------------------------------------
-	if dd if="$disk" bs=512 skip=1 count=1 status=none 2>/dev/null | strings | grep -q "EFI PART"; then
-		report+="GPT Primária......: ${GREEN}OK${RESET}\n"
-	else
-		report+="GPT Primária......: ${RED}FALHOU${RESET}\n"
-		status=2
-	fi
+	# Antes, o teste de assinatura GPT rodava incondicionalmente mesmo
+	# em disco MBR saudável (a busca por "EFI PART" sempre falhava nesse
+	# caso, marcando um disco perfeito como defeituoso). Agora só roda
+	# se a tabela for GPT, e o MBR ganha uma checagem própria e real
+	# (0x55AA), em vez de nenhuma verificação.
+	case "${pttype,,}" in
+	gpt)
+		# Tamanho de setor lógico real via blockdev --getss (não fixo
+		# em 512), para não dar falso-negativo em discos 4Kn. blockdev
+		# --getsz sempre devolve em unidades de 512 bytes, por isso a
+		# conversão para o número de setores lógicos antes de calcular
+		# o offset do backup. A comparação "EFI PART" via head -c 8
+		# elimina a dependência de "strings" (binutils, que não estava
+		# nem em DEPENDENCIES): se ausente, os dois testes falhavam e
+		# o disco virava "defeituoso" sem motivo real.
+		local ss sectors512 logical_sectors sig
+		ss=$(blockdev --getss "$disk" 2>/dev/null)
+		ss="${ss:-512}"
+		sectors512=$(blockdev --getsz "$disk" 2>/dev/null)
+		logical_sectors=$((sectors512 * 512 / ss))
 
-	# --------------------------------------------------------
-	# GPT Backup
-	# --------------------------------------------------------
-	local sectors
-	sectors=$(blockdev --getsz "$disk" 2>/dev/null)
-
-	if [[ -n "$sectors" ]]; then
-		if dd if="$disk" bs=512 skip=$((sectors - 1)) count=1 status=none 2>/dev/null | strings | grep -q "EFI PART"; then
-			report+="GPT Backup........: ${GREEN}OK${RESET}\n"
+		sig=$(dd if="$disk" bs="$ss" skip=1 count=1 status=none 2>/dev/null | head -c 8)
+		if [[ "$sig" == "EFI PART" ]]; then
+			report+="GPT Primária......: ${GREEN}OK${RESET}\n"
 		else
-			report+="GPT Backup........: ${RED}FALHOU${RESET}\n"
-			((status < 2)) && status=1
+			report+="GPT Primária......: ${RED}FALHOU${RESET}\n"
+			st_estrutura=2
 		fi
-	fi
+
+		if ((logical_sectors > 0)); then
+			sig=$(dd if="$disk" bs="$ss" skip=$((logical_sectors - 1)) count=1 status=none 2>/dev/null | head -c 8)
+			if [[ "$sig" == "EFI PART" ]]; then
+				report+="GPT Backup........: ${GREEN}OK${RESET}\n"
+			else
+				report+="GPT Backup........: ${RED}FALHOU${RESET}\n"
+				((st_estrutura < 2)) && st_estrutura=1
+			fi
+		fi
+		;;
+	dos | mbr)
+		local mbr_sig
+		mbr_sig=$(dd if="$disk" bs=1 skip=510 count=2 status=none 2>/dev/null | od -An -tx1 | tr -d ' \n')
+		if [[ "$mbr_sig" == "55aa" ]]; then
+			report+="Assinatura MBR....: ${GREEN}OK (0x55AA)${RESET}\n"
+		else
+			report+="Assinatura MBR....: ${RED}FALHOU${RESET}\n"
+			st_estrutura=2
+		fi
+		;;
+	esac
 
 	# --------------------------------------------------------
-	# blkid
+	# blkid — rc=2 significa "sem assinatura" (disco vazio), não é erro.
+	# Só rc>2 é falha de verdade. LC_ALL=C evita o mesmo problema de
+	# locale do fdisk acima, já que "Permission denied" também é
+	# traduzido pela glibc via LC_MESSAGES quando o pacote de locale
+	# está instalado.   [categoria: ESTRUTURA]
 	# --------------------------------------------------------
-	if blkid -p "$disk" >/dev/null 2>&1; then
-		report+="blkid.............: ${GREEN}OK${RESET}\n"
+	local blkid_rc blkid_err
+	blkid_err=$(LC_ALL=C blkid -p "$disk" 2>&1 >/dev/null)
+	blkid_rc=$?
+	case "$blkid_rc" in
+	0) report+="blkid.............: ${GREEN}OK${RESET}\n" ;;
+	2) report+="blkid.............: ${GREEN}Sem assinatura detectada${RESET}\n" ;;
+	*)
+		if grep -qiE "permission denied|operation not permitted" <<<"$blkid_err"; then
+			report+="blkid.............: ${YELLOW}Sem permissão para verificar (ambiente restrito?)${RESET}\n"
+		else
+			report+="blkid.............: ${RED}FALHOU (rc=$blkid_rc)${RESET}\n"
+		fi
+		((st_estrutura < 1)) && st_estrutura=1
+		;;
+	esac
+
+	# --------------------------------------------------------
+	# wipefs -n (somente consulta; sem -a ele já não apaga nada, mas -n
+	# deixa a intenção explícita no código de um instalador rodando
+	# como root).   [categoria: ESTRUTURA]
+	# --------------------------------------------------------
+	local wipefs_err
+	wipefs_err=$(LC_ALL=C wipefs -n "$disk" 2>&1 >/dev/null)
+	if [[ -z "$wipefs_err" ]]; then
+		report+="wipefs (consulta).: ${GREEN}OK${RESET}\n"
 	else
-		report+="blkid.............: ${RED}FALHOU${RESET}\n"
-		((status < 1)) && status=1
+		if grep -qiE "permission denied|operation not permitted" <<<"$wipefs_err"; then
+			report+="wipefs (consulta).: ${YELLOW}Sem permissão para verificar (ambiente restrito?)${RESET}\n"
+		else
+			report+="wipefs (consulta).: ${RED}FALHOU${RESET}\n"
+		fi
+		((st_estrutura < 1)) && st_estrutura=1
 	fi
 
 	# --------------------------------------------------------
-	# wipefs
+	# SMART (opcional)   [categoria: HARDWARE]
 	# --------------------------------------------------------
-	if wipefs "$disk" >/dev/null 2>&1; then
-		report+="wipefs............: ${GREEN}OK${RESET}\n"
-	else
-		report+="wipefs............: ${RED}FALHOU${RESET}\n"
-		((status < 1)) && status=1
-	fi
-
-	# --------------------------------------------------------
-	# SMART (opcional)
-	# --------------------------------------------------------
+	# Tenta detecção automática, depois -d sat e -d scsi: em muitas
+	# pontes USB o smartctl sem -d não retorna nada, mesmo com o disco
+	# saudável.
 	if command -v smartctl >/dev/null; then
-		smart=$(smartctl -H "$disk" 2>/dev/null | awk -F: '/overall-health|SMART overall-health|SMART Health Status/ {
-			gsub(/^[ \t]+/, "", $2)
-			print $2
-		}')
+		local smart_dtype="" smart_probe
+		for smart_dtype in "" "-d sat" "-d scsi"; do
+			smart_probe=$(smartctl -H $smart_dtype "$disk" 2>/dev/null | awk -F: '/overall-health|SMART overall-health|SMART Health Status/ {
+				gsub(/^[ \t]+/, "", $2)
+				print $2
+			}' | xargs)
+			[[ -n "$smart_probe" ]] && {
+				smart="$smart_probe"
+				break
+			}
+		done
 
-		[[ -z "$smart" ]] && smart="Indisponível"
+		[[ -z "$smart" || "$smart" == "Não disponível" ]] && smart="Indisponível (USB pode exigir -d sat)"
 		report+="SMART.............: $smart\n"
 
 		if echo "$smart" | grep -qiE 'FAILED|BAD'; then
-			status=2
+			st_hardware=2
+		fi
+
+		if [[ "${tran,,}" == "nvme" ]]; then
+			# NVMe não usa a tabela de atributos numerados do ATA/SATA
+			# — os IDs abaixo simplesmente não existem nesse formato.
+			# smartctl -a em NVMe imprime um log de saúde com campos
+			# próprios; estes são os equivalentes mais próximos de
+			# "degradação real".
+			local nvme_out crit_warn pct_used media_errors avail_spare avail_thresh
+			nvme_out=$(smartctl -a "$disk" 2>/dev/null)
+
+			crit_warn=$(awk -F: '/Critical Warning/ {gsub(/^[ \t]+/,"",$2); print $2}' <<<"$nvme_out" | head -1)
+			pct_used=$(awk -F: '/Percentage Used/ {gsub(/[^0-9]/,"",$2); print $2}' <<<"$nvme_out" | head -1)
+			media_errors=$(awk -F: '/Media and Data Integrity Errors/ {gsub(/[^0-9]/,"",$2); print $2}' <<<"$nvme_out" | head -1)
+			avail_spare=$(awk -F: '/^Available Spare:/ {gsub(/[^0-9]/,"",$2); print $2}' <<<"$nvme_out" | head -1)
+			avail_thresh=$(awk -F: '/Available Spare Threshold/ {gsub(/[^0-9]/,"",$2); print $2}' <<<"$nvme_out" | head -1)
+
+			if [[ -n "$crit_warn" ]]; then
+				if [[ "$crit_warn" != "0x00" && "$crit_warn" != "0" ]]; then
+					report+="  Critical Warning..........: ${RED}${crit_warn}${RESET}\n"
+					st_hardware=2
+				else
+					report+="  Critical Warning..........: ${GREEN}${crit_warn}${RESET}\n"
+				fi
+			fi
+
+			if [[ "$pct_used" =~ ^[0-9]+$ ]]; then
+				if ((pct_used >= 90)); then
+					report+="  Percentage Used...........: ${RED}${pct_used}%${RESET}\n"
+					((st_hardware < 2)) && st_hardware=2
+				elif ((pct_used >= 70)); then
+					report+="  Percentage Used...........: ${YELLOW}${pct_used}%${RESET}\n"
+					((st_hardware < 1)) && st_hardware=1
+				else
+					report+="  Percentage Used...........: ${GREEN}${pct_used}%${RESET}\n"
+				fi
+			fi
+
+			if [[ "$media_errors" =~ ^[0-9]+$ ]]; then
+				if [[ "$media_errors" != "0" ]]; then
+					report+="  Media/Integrity Errors....: ${RED}${media_errors}${RESET}\n"
+					st_hardware=2
+				else
+					report+="  Media/Integrity Errors....: ${GREEN}0${RESET}\n"
+				fi
+			fi
+
+			if [[ "$avail_spare" =~ ^[0-9]+$ && "$avail_thresh" =~ ^[0-9]+$ ]]; then
+				if ((avail_spare <= avail_thresh)); then
+					report+="  Available Spare...........: ${RED}${avail_spare}% (limite ${avail_thresh}%)${RESET}\n"
+					((st_hardware < 2)) && st_hardware=2
+				else
+					report+="  Available Spare...........: ${GREEN}${avail_spare}%${RESET}\n"
+				fi
+			fi
+		else
+			# ATA/SATA: tabela de atributos numerados. Indicam
+			# degradação real mesmo com -H "PASSED" — um disco pode ter
+			# centenas de setores realocados e ainda "passar" no teste
+			# de saúde geral, que só falha perto do fim da vida útil.
+			local attr_id attr_name attr_raw attr_color
+			for attr_id in 5 187 197 198; do
+				case "$attr_id" in
+				5) attr_name="Setores realocados......" ;;
+				187) attr_name="Erros não corrigidos....." ;;
+				197) attr_name="Setores pendentes........" ;;
+				198) attr_name="Setores incorrig. offline" ;;
+				esac
+				attr_raw=$(smartctl -A $smart_dtype "$disk" 2>/dev/null | awk -v id="$attr_id" '$1==id {print $NF}')
+				[[ -z "$attr_raw" ]] && continue
+				if [[ "$attr_raw" != "0" ]]; then
+					attr_color="${YELLOW}"
+					((st_hardware < 1)) && st_hardware=1
+				else
+					attr_color="${GREEN}"
+				fi
+				report+="  ${attr_name}: ${attr_color}${attr_raw}${RESET}\n"
+			done
 		fi
 	else
 		report+="SMART.............: Não instalado\n"
 	fi
 
 	# --------------------------------------------------------
-	# dmesg
+	# dmesg — regex ancorada (\b...\b) para "sda" não casar com "sda1"
+	# ou "sdaa"; grep -q para não vazar o match bruto por cima da tela.
+	#   [categoria: HARDWARE]
 	# --------------------------------------------------------
 	local dev
 	dev=$(basename "$disk")
-	errors=$(dmesg | grep -iE "$dev" | tail -5)
+	errors=$(dmesg | grep -E "\b${dev}[0-9]*\b" | tail -5)
 
 	if [[ -n "$errors" ]]; then
 		report+="\n${CYAN}Erros recentes:${RESET}\n"
 		report+="${YELLOW}$errors${RESET}\n"
-		if grep -iE "I/O error|Buffer I/O|blk_update_request|critical medium error|end_request" <<<"$errors"; then
-			((status < 2)) && status=2
+		if grep -qiE "I/O error|Buffer I/O|blk_update_request|critical medium error|end_request" <<<"$errors"; then
+			((st_hardware < 2)) && st_hardware=2
 		fi
 	fi
 
 	# --------------------------------------------------------
-	# Status Final
+	# Status Final — dois status independentes
 	# --------------------------------------------------------
-	report+="\n"
+	local final_status=$st_estrutura
+	((st_hardware > final_status)) && final_status=$st_hardware
 
-	case "$status" in
-	0) report+="${GREEN}STATUS: DISCO APARENTEMENTE SAUDÁVEL${RESET}" ;;
-	1) report+="${YELLOW}STATUS: AVISOS ENCONTRADOS${RESET}" ;;
-	2) report+="${RED}STATUS: POSSÍVEIS DEFEITOS NO DISCO${RESET}" ;;
+	report+="\n"
+	case "$st_estrutura" in
+	0) report+="${GREEN}ESTRUTURA: OK${RESET}\n" ;;
+	1) report+="${YELLOW}ESTRUTURA: AVISOS ENCONTRADOS${RESET}\n" ;;
+	2) report+="${RED}ESTRUTURA: POSSÍVEIS DEFEITOS${RESET}\n" ;;
+	esac
+	case "$st_hardware" in
+	0) report+="${GREEN}HARDWARE.: OK${RESET}" ;;
+	1) report+="${YELLOW}HARDWARE.: AVISOS ENCONTRADOS${RESET}" ;;
+	2) report+="${RED}HARDWARE.: POSSÍVEIS DEFEITOS${RESET}" ;;
 	esac
 
 	${DIALOG} \
 		--colors \
+		--scrollbar \
 		--backtitle "$ccabec" \
 		--title "Diagnóstico do Disco" \
 		--msgbox "$report" \
 		00 00
 
-	return "$status"
+	return "$final_status"
 }
 
 set_custom_install() {
@@ -4664,6 +4826,18 @@ ${BOLD}MODEL   : ${RESET}${RED}${MODEL_ORIGEM}${RESET}\n" \
 }
 
 sh_getNvme() {
+  local segtype
+  local device="${AConfDisk[_DEVICE]}"
+
+  segtype="$(sudo lvs "$device" -o segtype --noheadings 2>/dev/null | tr -d ' ')"
+
+  case "$segtype" in
+  thin | thin-pool)
+    echo ''
+    return
+    ;;
+  esac
+
 	local tran
 	local name
 
@@ -5430,6 +5604,7 @@ sh_choose_custom_packages() {
 	local custom
 
 	if ! $LONLY_TTY; then
+		aCustom['louvorja-piano']="$(gettext 'LouvorJA - PIANO - aplicativo desktop para gerenciamento de culto)')"
 		aCustom['voidbr-epoptes']="$(gettext 'An opensource computer lab management and monitoring tool (server)')"
 		aCustom['gwenview']="$(gettext 'Fast and easy to use image viewer by KD')"
 		aCustom['Thunar']="$(gettext 'Thunar File Manager')"
@@ -5903,7 +6078,8 @@ sh_checkInstall() {
 
 	if ! sh_check_mirror; then
 		DEFITEM="${cmsg_Mirror}"
-		return 1
+    sh_choose_mirror
+    return 1
 	fi
 
 	display_config
@@ -6475,12 +6651,13 @@ sh_install() {
 	abase+=(xz)
 	abase+=(sed)
 	abase+=(grep)
+	abase+=(grc)
 	abase+=(socklog)
 	abase+=(socklog-void)
 	abase+=(fastfetch)
 	#
 
-	agrub+=(dracut)
+	agrub+=(dracut voidbr-plymouth-theme)
   if [[ "${AConfBootLoader[_LOADER]}" == 'grub' ]]; then
   	agrub+=(grub-i386-efi)
   	agrub+=(grub-utils)

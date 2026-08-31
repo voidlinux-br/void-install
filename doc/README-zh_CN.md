@@ -1,6 +1,12 @@
-# void-install — 巴西 Void Linux 安装程序
+<div对齐=“中心”>
 
-适用于 VOID Linux 的 VoidBR 社区安装程序，专注于实用性、自动化和现代安装体验。
+# 🔵 无效安装
+
+**VoidBR社区安装程序，专注于实用性、自动化和现代安装体验。**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)]（许可证）
+
+</div>
 
 ---
 
@@ -12,14 +18,12 @@
 
 ```bash
 {
-  echo 'repository=https://repo-fastly.voidlinux.org/current'
   echo 'repository=https://void.voidbr.org/voidlinux/current'
   echo 'repository=https://void.voidbr.org/voidlinux/extra'
+  echo 'repository=https://repo-fastly.voidlinux.org/current'
 } | sudo tee /etc/xbps.d/00-repository-main.conf
 
-sudo xbps-install -Syu xbps
-sudo xbps-install -Syu libssh2
-sudo xbps-install -Syf void-install
+sudo xbps-install -Syu xbps libssh2 void-install
 
 sudo void-install
 ```
@@ -32,13 +36,12 @@ sudo void-install
 git clone --depth=1 https://github.com/voidlinuxbr/void-install
 cd void-install
 
+# Executar localmente sem instalar:
+sudo ./void-install
+
+# instalar:
 sudo make install
-```
 
-本地运行，无需安装：
-
-```bash
-./void-install
 ```
 
 ---

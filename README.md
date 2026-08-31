@@ -1,6 +1,12 @@
-# void-install — Instalador brasileiro do Void Linux
+<div align="center">
 
-Instalador da comunidade VoidBR para o VOID Linux, focado em praticidade, automação e experiência moderna de instalação.
+# 🔵 void-install
+
+**Instalador da comunidade VoidBR, focado em praticidade, automação e experiência moderna de instalação.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
+
+</div>
 
 ---
 
@@ -30,13 +36,12 @@ sudo void-install
 git clone --depth=1 https://github.com/voidlinuxbr/void-install
 cd void-install
 
+# Executar localmente sem instalar:
+sudo ./void-install
+
+# instalar:
 sudo make install
-```
 
-Executar localmente sem instalar:
-
-```bash
-./void-install
 ```
 
 ---

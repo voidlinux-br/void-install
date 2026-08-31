@@ -1,6 +1,12 @@
-# void-install – brasilianisches Void-Linux-Installationsprogramm
+<div align="center">
 
-VoidBR-Community-Installationsprogramm für VOID Linux, das sich auf Praktikabilität, Automatisierung und modernes Installationserlebnis konzentriert.
+# 🔵 void-install
+
+**VoidBR-Community-Installer, der sich auf Praktikabilität, Automatisierung und modernes Installationserlebnis konzentriert.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LIZENZ)
+
+</div>
 
 ---
 
@@ -12,14 +18,12 @@ Verwendung der offiziellen Void Linux ISO:
 
 ```bash
 {
-  echo 'repository=https://repo-fastly.voidlinux.org/current'
   echo 'repository=https://void.voidbr.org/voidlinux/current'
   echo 'repository=https://void.voidbr.org/voidlinux/extra'
+  echo 'repository=https://repo-fastly.voidlinux.org/current'
 } | sudo tee /etc/xbps.d/00-repository-main.conf
 
-sudo xbps-install -Syu xbps
-sudo xbps-install -Syu libssh2
-sudo xbps-install -Syf void-install
+sudo xbps-install -Syu xbps libssh2 void-install
 
 sudo void-install
 ```
@@ -32,13 +36,12 @@ sudo void-install
 git clone --depth=1 https://github.com/voidlinuxbr/void-install
 cd void-install
 
+# Executar localmente sem instalar:
+sudo ./void-install
+
+# instalar:
 sudo make install
-```
 
-Lokal ausführen ohne Installation:
-
-```bash
-./void-install
 ```
 
 ---

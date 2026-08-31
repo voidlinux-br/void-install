@@ -1,6 +1,12 @@
-# void-install — 브라질 Void Linux 설치 프로그램
+<div 정렬="중앙">
 
-실용성, 자동화 및 최신 설치 경험에 중점을 둔 VOID Linux용 VoidBR 커뮤니티 설치 프로그램입니다.
+# 🔵 무효 설치
+
+**실용성, 자동화 및 최신 설치 경험에 중점을 둔 VoidBR 커뮤니티 설치 프로그램입니다.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](라이센스)
+
+</div>
 
 ---
 
@@ -12,14 +18,12 @@
 
 ```bash
 {
-  echo 'repository=https://repo-fastly.voidlinux.org/current'
   echo 'repository=https://void.voidbr.org/voidlinux/current'
   echo 'repository=https://void.voidbr.org/voidlinux/extra'
+  echo 'repository=https://repo-fastly.voidlinux.org/current'
 } | sudo tee /etc/xbps.d/00-repository-main.conf
 
-sudo xbps-install -Syu xbps
-sudo xbps-install -Syu libssh2
-sudo xbps-install -Syf void-install
+sudo xbps-install -Syu xbps libssh2 void-install
 
 sudo void-install
 ```
@@ -32,13 +36,12 @@ sudo void-install
 git clone --depth=1 https://github.com/voidlinuxbr/void-install
 cd void-install
 
+# Executar localmente sem instalar:
+sudo ./void-install
+
+# instalar:
 sudo make install
-```
 
-설치하지 않고 로컬로 실행:
-
-```bash
-./void-install
 ```
 
 ---
