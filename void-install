@@ -4,7 +4,7 @@
 #
 #  void-install
 #  Created: 2022/12/24
-#  Updated: dom 30 ago 2026 04:57:54 -04
+#  Updated: ter 15 set 2026 00:15:13 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -32,6 +32,7 @@
 export LANGUAGE="${LANGUAGE:-pt_BR}"
 export TEXTDOMAINDIR=/usr/share/locale
 export TEXTDOMAIN=void-install
+export VOIDBR_INSTALLER=true
 
 #todo
 #usermod -a -G bluetooth $USER
@@ -50,7 +51,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.8.30-20260830'
+readonly _VERSION_='3.9.15-20260915'
 declare -g DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr
 	chroot blkid fdisk parted lsblk curl xz tee
 	mkfs.vfat mkfs.xfs mkfs.ntfs mkfs.jfs mkfs.btrfs mkfs.f2fs mkfs.nilfs2
@@ -107,6 +108,10 @@ declare LWM=true
 declare LDM=true
 declare LAUTO=true
 declare LMKPARTED=false
+declare LMKPARTED_DEVICE=''
+declare LUPDATELOCAL=false
+declare LHAS_INTERNET=false
+declare LREPO_ONLINE=true
 declare LFSREVISED=false
 declare LFS=false
 declare LPARTITION=false
@@ -127,6 +132,17 @@ declare LXORG=false
 declare LSWAY=false
 declare LMANGO=false
 declare LHYPRLAND=false
+declare LXFCE=false
+declare LFLUXBOX=false
+declare LBSPWM=false
+declare LLXDE=false
+declare LI3=false
+declare LGNOME=false
+declare LPLASMA=false
+declare LMATE=false
+declare LCINNAMON=false
+declare LENLIGHTENMENT=false
+declare LMETA=false
 #
 declare DEFITEM
 #
@@ -153,13 +169,14 @@ declare -gA AsUser=(
 #
 declare -gA AConfFde=(
 	[partition]=''
-	[vg]='voidvm'
+	[vg]=''
 	[passphrase]='voidlinux'
 	[verifypassphrase]='voidlinux'
-	[lvroot]='25%'
-	[lvswap]='2%'
+	[lvroot]='100%'
+	[lvboot]=''
+	[lvswap]=''
 	[lvvar]=''
-	[lvhome]='100%'
+	[lvhome]=''
 )
 declare -gA AConfDisk=(
 	[_DEVICE]='/dev/sdX'
@@ -216,12 +233,12 @@ declare -gA Alocale=(
 	[5]=it_IT
 )
 declare -gA AsDhcp=(
-	AsDhcp [IFACE]="${Asdhcp[IFACE]:-eth0}"
-	AsDhcp [IP]="${AsDhcp[IP]:-192.168.1.100}"
-	AsDhcp [CIDR]="${AsDhcp[CIDR]:-24}"
-	AsDhcp [GATEWAY]="${AsDhcp[GATEWAY]:-192.168.1.1}"
-	AsDhcp [DNS1]="${AsDhcp[DNS1]:-1.1.1.1}"
-	AsDhcp [DNS2]="${AsDhcp[DNS2]:-8.8.8.8}"
+	['IFACE']="eth0"
+	['IP']="192.168.1.100"
+	['CIDR']="24"
+	['GATEWAY']="192.168.1.1"
+	['DNS1']="1.1.1.1"
+	['DNS2']="8.8.8.8"
 )
 declare -gA AsDiskPercent=(
 	[_DISKTABLE]="EFI"
@@ -248,6 +265,9 @@ declare dialogRcFile="$HOME/.dialogrc"
 declare _DISPLAYMANAGER='None'
 declare _WINDOWMANAGER=('tty')
 declare _WM='tty'
+declare -a _WM_SAVE=()
+declare _LONLY_TTY_SAVE=''
+declare _DM_SAVE=''
 declare _WIFI_NETWORK="wifi_ssid"
 declare _WIFI_PASSWORD="wifi_password"
 declare Interrupted="$(gettext "Interrompido! Saindo...")"
@@ -431,38 +451,54 @@ sh_enablePrintk() {
 }
 
 get_option() {
-	echo $(grep -E "^${1}.*" $app_conf | sed -e "s|${1}||")
+	grep -E "^${1}.*" "$app_conf" | sed -e "s|${1}||"
 }
 
 die() {
-	local msg=$1
+	local msg
 	local erros
-	local tmp
+	local logsection
+	local l
 
 	if test $# -ge 2; then
 		evaluate_retval 1
 	fi
 
-	#  mapfile -t erros < <(
-	#    tail -n 30 "$BOOTLOG" | grep -Ei 'ERRO:|ERROR:|FAIL|FAILED'
-	#  )
-	#  if [[ "${#erros[@]}" -eq 0 ]]; then
-	#    mapfile -t erros < <(
-	#      tail -n 20 "$BOOTLOG"
-	#    )
-	#  fi
+	# Antes só usava "$1" — se a chamada passasse um 2º argumento (ex: título
+	# + motivo do erro), o motivo era descartado silenciosamente e o usuário
+	# nunca via por que a instalação parou.
+	msg="$(printf '%s\n' "$@")"
 
-	tmp="$(mktemp)"
-	# tail -n 40 "$BOOTLOG" | grep -Ei 'ERRO:|ERROR:|FAIL|FAILED' > "$tmp"
-	tail -n 13 "$BOOTLOG" >"$tmp"
-	printf '\n%s\n' "$msg" >>"$tmp"
+	# Tenta achar o bloco da falha de verdade (a linha "[ FAIL ]" e o que veio
+	# logo antes dela, onde fica a saída real do comando que falhou). Se não
+	# achar nenhum "[ FAIL ]" (ex: die chamado por escolha do usuário, sem
+	# comando ter falhado), cai no fallback de mostrar as últimas linhas.
+	mapfile -t erros < <(grep -B 20 -F '[ FAIL ]' "$BOOTLOG" | tail -n 30)
+	if [[ "${#erros[@]}" -eq 0 ]]; then
+		mapfile -t erros < <(tail -n 20 "$BOOTLOG")
+	fi
 
-	shift
+	# Testado à exaustão: nem --textbox nem --programbox interpretam "\Z"
+	# nem ANSI real vindo de arquivo/pipe — só texto passado direto como
+	# argumento (--msgbox) aceita cor de verdade. O motivo de termos saído
+	# do --msgbox antes era ele cortar conteúdo maior que a caixa — mas com
+	# a altura generosa (bem acima do teto de ~30 linhas do mapfile acima),
+	# testado e confirmado: cabe tudo, nada fica escondido, e sai colorido
+	# de verdade. Cada linha ganha cor conforme o tipo, pra não ficar tudo
+	# vermelho: FAIL é o que realmente importa, o resto é contexto.
+	logsection=""
+	for l in "${erros[@]}"; do
+		case "$l" in
+		*"[ FAIL ]"*) logsection+="${RED}${l}${RST}\n" ;;
+		*"[  OK  ]"*) logsection+="${GREEN}${l}${RST}\n" ;;
+		*"[ INFO ]"*) logsection+="${CYAN}${l}${RST}\n" ;;
+		"####"*) logsection+="${l}\n" ;;
+		*) logsection+="${YELLOW}${l}${RST}\n" ;;
+		esac
+	done
 
 	if has_command dialog; then
-		#alerta_die "DIE" "\n${BOLD}${RED}$msg${RST}" erros
-		${DIALOG} --title "ERRO - $msg" --textbox "$tmp" 20 120
-		rm -f "$tmp"
+		${DIALOG} --title "ERRO" --colors --msgbox "\n${BOLD}${RED}${msg}${RST}\n\n--- $(gettext 'Últimas linhas registradas') ---\n${logsection}" 40 150
 	else
 		printf "%-75s\n" "$(DOT)${bold}${red}$msg${reset}" >&2
 	fi
@@ -527,14 +563,14 @@ sh_cmd_job() {
 	local cjob="$2"
 	local erro_fatal="$3"
 	local lretval=0
-  local disk="${AConfDisk[_DEVICE]}"
+	local disk="${AConfDisk[_DEVICE]}"
 
-#	cmsg+=" ${cmsg_Em} ${yellow}${disk}"
+	#	cmsg+=" ${cmsg_Em} ${yellow}${disk}"
 	last_msg="$cmsg"
 	msg "INFO" "$last_msg" "$(log_info_msg "$last_msg")"
 
 	if ((grafico)); then
-		read LINES COLUMNS <<<"$(stty size)"
+		read -r LINES COLUMNS <<<"$(stty size)"
 		cmsg=$(strip_ansi "$cmsg")
 		eval "$cjob" 2>&1 | tee -i -a "$BOOTLOG" |
 			${DIALOG} \
@@ -559,9 +595,9 @@ sh_chroot_job() {
 	local erro_fatal="$3"
 	local level="$4"
 	local lretval=0
-  local disk="${AConfDisk[_DEVICE]}"
+	local disk="${AConfDisk[_DEVICE]}"
 
-#	cmsg+=" ${cmsg_Em} ${yellow}${disk}"
+	#	cmsg+=" ${cmsg_Em} ${yellow}${disk}"
 	last_msg="$cmsg"
 
 	# CHAMADA DA MSG: Agora com "silent" para não cagar o progressbox abaixo
@@ -572,7 +608,7 @@ sh_chroot_job() {
 	fi
 
 	if ((grafico)); then
-		read LINES COLUMNS <<<"$(stty size)"
+		read -r LINES COLUMNS <<<"$(stty size)"
 		clean_logmessage="$(strip_ansi "$logmessage")"
 		# SEU CÓDIGO ORIGINAL ABAIXO
 		chroot "$dir_install" "$shell" -c "$cjob" 2>&1 | tee -i -a "$BOOTLOG" |
@@ -688,6 +724,9 @@ sh_update_self() {
 }
 
 sh_configure_display_manager() {
+	declare -ga aDisplaymanager=()
+	declare -ga aDisplaymanagerConfig=()
+
 	if ! $LONLY_TTY; then
 		case $_DISPLAYMANAGER in
 		lxdm)
@@ -733,44 +772,29 @@ sh_configure_display_manager() {
 }
 
 sh_choose_common_packages() {
-	declare -ga aDisplaymanager=()
-	declare -ga aDisplaymanagerConfig=()
-	declare -ga custom=()
-	declare -ga aExtra=(
-		bash-completion
-		fzf
-		dialog
-		pv
-		tree
-		duf
-		parted
-		rsync
-		nvme-cli
-		curl
-		wget
-		nano
-	)
+	declare -ga aExtra=()
 
-	if $LCUSTOM; then
-		declare -ga aMicrocode=(
-			intel-ucode
-			linux-firmware-amd
-		)
-
-		declare -ga aSuplemento=(
+	if $LCUSTOM && $LHAS_INTERNET && ! $LXORG && ! $LMETA; then # tem internet e o usuário topou customizar
+		aExtra+=(
+			fzf
+			dialog
+			pv
+			tree
+			duf
+			parted
+			rsync
+			nvme-cli
+			curl
+			wget
+			nano
+			parallel
 			voidbr-utils
 			voidbr-nano-config
 			voidbr-webapps
 			chili-utils
 			chili-clonedisk
 		)
-
-		aExtra+=(
-			parallel
-		)
 	fi
-
-	sh_configure_display_manager
 
 	if $LSERVER; then
 		aPackageDaemons+=(iptables)
@@ -782,15 +806,11 @@ sh_choose_common_packages() {
 	aPackageDaemons+=(NetworkManager dhcpcd)
 	aServicesTTY+=(NetworkManager)
 
-	if $LSWAY; then
+	if [[ "${AConfMirror[_SOURCE]}" = "local" ]]; then
 		return
 	fi
 
-	if $LMANGO; then
-		return
-	fi
-
-	if $LHYPRLAND; then
+	if $LMETA; then
 		return
 	fi
 
@@ -805,41 +825,21 @@ sh_choose_common_packages() {
 		declare -ga aPipewire=(pipewire wireplumber alsa-pipewire pulseaudio-utils pavucontrol libspa-bluetooth libjack-pipewire alsa-plugins-pulseaudio alsa-utils)
 
 		if $LCUSTOM; then
-			declare -ga aIconsAndThemes=()
-			declare -ga aArchiverX=()
-			declare -ga aBrowser=()
-			declare -ga aFilemanager=()
 			declare -ga aBluetooth=(bluez bluez-alsa bluedevil blueman bluez-deprecated gnome-bluetooth1 blueberry)
-			declare -ga aFonts=()
-			declare -ga aPerfumery=()
-			declare -ga aPrinter=()
 			declare -ga aTerminal=(rxvt-unicode)
-			declare -ga aEditorX=()
 			declare -ga aNetworkX=(gvfs gvfs-smb gvfs-mtp gvfs-afc gvfs-cdda gvfs-gphoto2 udisks2)
 			declare -ga aUtilityX=(xkill lm_sensors)
-			declare -ga aArchiverTty=()
-			declare -ga aDownloader=()
-			#			declare -ga aUtility=(binutils dfc btop parallel bubblewrap cmatrix pfetch bc bat xtools geoip geoipupdate)
 			declare -ga aUtility=(binutils bc)
-			aServicesX+=(bluetoothd)
-		else
-			declare -ga aIconsAndThemes=()
-			declare -ga aTerminal=()
-			declare -ga aBrowser=()
-			declare -ga aFilemanager=()
-			declare -ga aUtilityX=()
 		fi
 
 		aFonts+=(noto-fonts-emoji)
-		aFonts+=(
-			noto-fonts-cjk
-			dejavu-fonts-ttf
-			font-fira-ttf
-			font-firacode
-			font-hack-ttf
-			ttf-jetbrains-mono-nerd
-			#nerd-fonts
-		)
+		aFonts+=(noto-fonts-cjk)
+		aFonts+=(dejavu-fonts-ttf)
+		aFonts+=(font-fira-ttf)
+		aFonts+=(font-firacode)
+		aFonts+=(font-hack-ttf)
+		aFonts+=(ttf-jetbrains-mono-nerd)
+		#
 		aIconsAndThemes+=(Adapta adwaita-icon-theme arc-theme)
 		aTerminal+=(xfce4-terminal)
 		aBrowser+=(firefox firefox-i18n-$(sh_get_language_without_utf8))
@@ -937,7 +937,7 @@ sh_setEnvironment() {
 	GREEN="\Z2"
 	YELLOW="\Z3"
 	BLUE="\Z4"
-  MAGENTA="\Z5"
+	MAGENTA="\Z5"
 	CYAN="\Z6"
 	WHITE="\Z7"
 	BLACK="\Z0"
@@ -973,7 +973,6 @@ sh_setEnvironment() {
 }
 
 sh_touchConf() {
-	#		_WINDOWMANAGER=(${_WINDOWMANAGER[*]})
 	cat >"$app_conf" <<-EOF
 		######################################################################
 		# void-install.conf
@@ -990,9 +989,22 @@ sh_touchConf() {
 		declare -p LSWAY
 		declare -p LMANGO
 		declare -p LHYPRLAND
+		declare -p LXFCE
+		declare -p LFLUXBOX
+		declare -p LBSPWM
+		declare -p LLXDE
+		declare -p LI3
+		declare -p LMETA
+		declare -p LGNOME
+		declare -p LPLASMA
+		declare -p LXORG
+		declare -p LENLIGHTENMENT
+		declare -p LMATE
+		declare -p LCINNAMON
+		declare -p LSERVER
 		declare -p LDHCP
 		declare -p LCUSTOM
-		declare -p LCUSTOM
+		declare -p LUPDATELOCAL
 		declare -p LDISK
 		declare -p LEFI
 		declare -p LAUDIO
@@ -1001,11 +1013,15 @@ sh_touchConf() {
 		declare -p LBIOS
 		declare -p LKERNEL
 		declare -p LMKPARTED
+		declare -p LMKPARTED_DEVICE
 		declare -p LFSREVISED
-		#		declare -p _WIFI_NETWORK
-		#		declare -p _WIFI_PASSWORD
+		declare -p LVM
+		declare -p LFDE
 		declare -p _DISPLAYMANAGER
 		declare -p _WINDOWMANAGER
+		declare -p _WM_SAVE
+		declare -p _LONLY_TTY_SAVE
+		declare -p _DM_SAVE
 		declare -p AsUser
 		declare -p Amkfs
 		declare -p AsDhcp
@@ -1016,14 +1032,11 @@ sh_touchConf() {
 		declare -p AConfDisk
 		declare -p AConfAudio
 		declare -p AConfKernel
-    declare -p AConfBootLoader
+		declare -p AConfBootLoader
 		declare -p AConfLocale
 		declare -p AConfMirror
 		declare -p AConfWifi
 		declare -p AConfFde
-		declare -p LCUSTOM
-		declare -p LAUTOLOGIN
-		declare -p HYPRLAND
 		#	declare -p AARRAY_DSK_DEVICES
 		#	declare -p AARRAY_PART_DEVICES
 		#	} | sed 's/declare -/&g/' >>"$app_conf"
@@ -1141,7 +1154,10 @@ sh_setAsDhcp() {
 
 sh_setUser() {
 	AsUser[cuser]=${AsUser[cuser]:-$(sh_getusernameloggeduserbyid)}
-	AsUser[cfullname]=${AsUser[cfullname]:-$(sh_getfullusernameloggeduserbyGetent)}
+	#	AsUser[cfullname]=${AsUser[cfullname]:-$(sh_getfullusernameloggeduserbyGetent)}
+	AsUser[cfullname]=${AsUser[cfullname]:-$(sh_getfullnamefromuser "${AsUser[cuser]}")}
+	# ISO: anon normalmente tem GECOS vazio — cai no próprio nome de usuário
+	AsUser[cfullname]=${AsUser[cfullname]:-${AsUser[cuser]}}
 	AsUser[cpass]=${AsUser[cpass]:-voidlinux}
 	AsUser[cpassroot]=${AsUser[cpassroot]:-voidlinux}
 	AsUser[chostname]=${AsUser[chostname]:-voidbr}
@@ -1629,6 +1645,7 @@ alerta_end() {
 		--title "$1" \
 		--backtitle "$ccabec" \
 		--extra-button --extra-label "$(gettext 'Reboot')" \
+		--yes-label "$(gettext 'Sair')" \
 		--no-label "$(gettext 'Desligar')" \
 		--yesno "\n$2\n$3\n$4\n$5\n$6" \
 		10 81
@@ -1885,12 +1902,82 @@ is_valid_fs() {
 	return 1
 }
 
+# Pergunta se o usuário quer criptografar o disco (LUKS) antes de particionar.
+# Chamada no início de sh_getPartitionsPercent, pois a resposta muda o layout
+# oferecido na tela seguinte (com LUKS, boot/swap/home não são partições
+# físicas separadas).
+sh_ask_partition_mode() {
+	local choice
+
+	while true; do
+		choice=$(${DIALOG} --stdout --colors \
+			--backtitle "$ccabec" \
+			--title "=== $(gettext 'MODO DE PARTICIONAMENTO') ===" \
+			--ok-label "${cmsg_Aceitar}" \
+			--radiolist "\n$(gettext 'Como deseja particionar o disco?')" \
+			14 70 3 \
+			"normal" "$(gettext 'Normal - Partições físicas tradicionais (root/boot/swap/home)')" "on" \
+			"lvm" "$(gettext 'LVM - Usar gerenciador de volumes lógicos (sem criptografia)')" "off" \
+			"fde" "$(gettext 'FDE - Encriptar o disco (LUKS) com LVM')" "off")
+
+		case "$choice" in
+		normal)
+			LFDE=false
+			LVM=false
+			return 0
+			;;
+		lvm)
+			# Já escolheu "lvm" no menu — o padrão aqui é "Sim" (conf, não
+			# notconf), só confirma; ainda dá pra desistir escolhendo "Não".
+			if conf "=== $(gettext 'LVM') ===" \
+				"\n$(gettext 'Deseja usar LVM (Logical Volume Manager) para este disco?')\n" \
+				"\n${YELLOW}$(gettext 'Se sim, /boot, swap e /home NÃO serão partições separadas: tudo ficará dentro do grupo de volumes, como volumes lógicos configurados a seguir.')${RST}"; then
+				LFDE=false
+				LVM=true
+				return 0
+			else
+				continue # respondeu "Não" -> volta pro menu de 3 opções
+			fi
+			;;
+		fde)
+			# Já escolheu "fde" no menu — o padrão aqui é "Sim" (conf, não
+			# notconf), só confirma; ainda dá pra desistir escolhendo "Não".
+			if conf "=== $(gettext 'CRIPTOGRAFIA DE DISCO') (LUKS) ===" \
+				"\n$(gettext 'Deseja criptografar este disco com LUKS (Full Disk Encryption)?')\n" \
+				"\n${YELLOW}$(gettext 'Se sim, /boot, swap e /home NÃO serão partições separadas: tudo ficará dentro do container criptografado, como volumes lógicos configurados a seguir.')${RST}"; then
+				LFDE=true
+				LVM=true
+				return 0
+			else
+				continue # respondeu "Não" -> volta pro menu de 3 opções
+			fi
+			;;
+		*)
+			return 1 # ESC/Cancelar
+			;;
+		esac
+	done
+}
+
 sh_getPartitionsPercent() {
 	local -a aPercent=()
 	local percent_text
 	local disk_size="${SIZE_ORIGEM}"
+	local lattr=0
 	AsDiskPercent[_DISKTABLE]="${AConfDisk[_DISKTABLE]}"
 	xtitle="${AConfDisk[_DEVICE]} - $(gettext "Configuração de Partições")"
+
+	sh_ask_partition_mode
+	if $LFDE || $LVM; then
+		# Com LUKS e/ou LVM ativo, tudo (boot/swap/home) vira volume lógico
+		# dentro do container/VG, configurado depois em sh_confLvm — não faz
+		# sentido oferecer essas partições como físicas aqui. root sempre 100%.
+		lattr=2
+		AsDiskPercent[root]=100
+		AsDiskPercent[boot]=0
+		AsDiskPercent[home]=0
+		AsDiskPercent[swap]=0
+	fi
 
 	AsDiskSize[root]="$(sh_get_part_size ${SIZE_ORIGEM} ${AsDiskPercent[root]})G"
 	AsDiskSize[boot]="$(sh_get_part_size ${SIZE_ORIGEM} ${AsDiskPercent[boot]})G"
@@ -1919,16 +2006,16 @@ sh_getPartitionsPercent() {
 				15 100 0 \
 				\
 				"Mode" 1 01 "${AsDiskPercent[_DISKTABLE]}" 1 24 15 15 2 \
-				"root (/) (%)" 2 01 "${AsDiskPercent[root]}" 2 24 05 05 0 \
+				"root (/) (%)" 2 01 "${AsDiskPercent[root]}" 2 24 05 05 $lattr \
 				"" 2 14 "${AsDiskSize[root]}" 2 14 10 10 2 \
 				"FS" 2 32 "${AsFs[root]:-ext4}" 2 37 10 10 0 \
-				"/boot    (%)" 3 01 "${AsDiskPercent[boot]}" 3 24 05 05 0 \
+				"/boot    (%)" 3 01 "${AsDiskPercent[boot]}" 3 24 05 05 $lattr \
 				"" 3 14 "${AsDiskSize[boot]}" 3 14 10 10 2 \
-				"FS" 3 32 "${AsFs[boot]:-ext4}" 3 37 10 10 0 \
-				"/home    (%)" 4 01 "${AsDiskPercent[home]}" 4 24 05 05 0 \
+				"FS" 3 32 "${AsFs[boot]:-ext4}" 3 37 10 10 $lattr \
+				"/home    (%)" 4 01 "${AsDiskPercent[home]}" 4 24 05 05 $lattr \
 				"" 4 14 "${AsDiskSize[home]}" 4 14 10 10 2 \
-				"FS" 4 32 "${AsFs[home]:-ext4}" 4 37 10 10 0 \
-				"swap     (%)" 5 01 "${AsDiskPercent[swap]}" 5 24 05 10 0 \
+				"FS" 4 32 "${AsFs[home]:-ext4}" 4 37 10 10 $lattr \
+				"swap     (%)" 5 01 "${AsDiskPercent[swap]}" 5 24 05 10 $lattr \
 				"" 5 14 "${AsDiskSize[swap]}" 5 14 10 10 2 \
 				"FS" 5 32 "${AsFs[swap]:-swap}" 5 37 10 10 2 \
 				"TOTAL    (%)" 6 01 "${total}" 6 24 05 10 2
@@ -2110,7 +2197,7 @@ sh_getPartitionsPercent() {
 		fi
 	done
 
-  [[ ${AsFs[boot]} == vfat ]] && AsFs[boot]="fat32"
+	[[ ${AsFs[boot]} == vfat ]] && AsFs[boot]="fat32"
 	withhome=true
 	withboot=true
 	withswap=true
@@ -2141,7 +2228,70 @@ sh_checkSpaceToSwap() {
 	return 0
 }
 
+sh_close_stale_crypto() {
+	local device="$1"
+	local mapper name vg backing
+
+	[[ -n "$device" ]] || return 0
+
+	# Sem isso, pvs/vgs às vezes enxergam um cache desatualizado do LVM (visto
+	# em testes: vgs/vgchange diziam "not found" pra um VG que o vgremove
+	# logo depois conseguia remover normalmente) — força releitura real do
+	# disco antes de checar. vgscan atualiza o cache tradicional; pvscan
+	# --cache reconstrói especificamente o cache de "hints" do LVM, que foi
+	# a causa raiz confirmada de "skip hint hash but found label" nos logs.
+	vgscan >/dev/null 2>&1
+	pvscan --cache >/dev/null 2>&1
+
+	for mapper in /dev/mapper/*; do
+		[[ -e "$mapper" && "$mapper" != "/dev/mapper/control" ]] || continue
+		name=$(basename "$mapper")
+
+		# só interessa mapeamentos crypt (LUKS) cujo dispositivo de origem
+		# seja uma partição do disco alvo (ex: /dev/sda3)
+		backing=$(cryptsetup status "$name" 2>/dev/null | awk -F': ' '/device:/ {print $2}' | tr -d ' ')
+		[[ -n "$backing" && "$backing" == "${device}"* ]] || continue
+
+		# se houver VG em cima desse mapper, desativa primeiro
+		vg=$(pvs --noheadings -o vg_name "$mapper" 2>/dev/null | tr -d ' ')
+		[[ -n "$vg" ]] && vgchange -an "$vg" >/dev/null 2>&1
+
+		cryptsetup luksClose "$name" >/dev/null 2>&1
+	done
+}
+
+# Complementa sh_close_stale_crypto pro caso sem LUKS: se o dispositivo alvo
+# já pertence a um VG ativo (ex: instalação anterior abortada sem limpar,
+# deixando o VG/LVM pendurado), desativa e remove esse VG antes de tentar
+# criar um novo em cima do mesmo dispositivo.
+sh_close_stale_lvm() {
+	local device="$1"
+	local pv vg
+
+	[[ -n "$device" ]] || return 0
+
+	# Mesmo motivo do sh_close_stale_crypto: sem forçar releitura, pvs pode
+	# reportar "nada encontrado" mesmo com um VG de verdade ativo no disco.
+	vgscan >/dev/null 2>&1
+	pvscan --cache >/dev/null 2>&1
+
+	while read -r pv vg; do
+		[[ -n "$pv" && "$pv" == "${device}"* ]] || continue
+		[[ -n "$vg" ]] || continue
+		vgchange -an "$vg" >/dev/null 2>&1
+		vgremove -ff "$vg" >/dev/null 2>&1
+
+		# vgremove só desregistra o VG da visão ativa do LVM — a assinatura
+		# em si pode continuar gravada no disco, e um vgscan completo mais
+		# tarde "redescobre" esse mesmo VG como se nunca tivesse sido
+		# removido. Apaga a assinatura de verdade, nos dois níveis.
+		pvremove -ff -y "$pv" >/dev/null 2>&1
+		wipefs -a "$pv" >/dev/null 2>&1
+	done < <(pvs --noheadings -o pv_name,vg_name 2>/dev/null)
+}
+
 sh_mkparted() {
+	local silent="${1:-false}"
 	local nchoice=false
 	local withboot=true
 	local withhome=true
@@ -2151,24 +2301,37 @@ sh_mkparted() {
 	local cini=''
 	local cnextpart=''
 	local CSCRIPT=''
+	local _p
 
-	sh_info_msg "${cmsg_TestandoDisco} ${AConfDisk[_DEVICE]}"
-	if ! sh_testDisk; then
-		die "${cmsg_ErroLeituraDisco}: ${AConfDisk[_DEVICE]}."
-	fi
+	# Fecha qualquer LUKS/LVM remanescente de um teste anterior que ainda
+	# esteja ativo em cima de uma partição deste disco (ou deste LV, se o
+	# alvo for um volume lógico), para evitar falha do kernel ao reler a
+	# tabela de partições ("dispositivo ocupado"). Cobre tanto container
+	# LUKS quanto VG puro (sem criptografia) — usa correspondência por
+	# prefixo, então funciona passando o disco inteiro (pega qualquer
+	# partição dele que esteja com resíduo).
+	sh_close_stale_crypto "${AConfDisk[_DEVICE]}"
+	sh_close_stale_lvm "${AConfDisk[_DEVICE]}"
 
-	if ! ((grafico)); then
-		if ! ((quiet)); then
-			replicate "=" "$COLUMNS"
-			if ! fdisk -l "${AConfDisk[_DEVICE]}"; then
-				die "${cmsg_ErroLeituraDisco}: ${AConfDisk[_DEVICE]}."
-			fi
-			replicate "=" "$COLUMNS"
-			if ! $LMKPARTED; then
-				echo "${yellow}${cwarning} ${red}${cmsg_todos_os_dados_serao_perdidos}${reset}"
-			fi
-		fi
-	fi
+	# Comentado a pedido — todo o bloco, inclusive o fdisk -l (lento) e o
+	# aviso associado. Talvez volte a ser usado no futuro.
+	# sh_info_msg "${cmsg_TestandoDisco} ${AConfDisk[_DEVICE]}"
+	# if ! sh_testDisk; then
+	#   die "${cmsg_ErroLeituraDisco}: ${AConfDisk[_DEVICE]}."
+	# fi
+	#
+	# if ! ((grafico)); then
+	#   if ! ((quiet)); then
+	#     replicate "=" "$COLUMNS"
+	#     if ! fdisk -l "${AConfDisk[_DEVICE]}"; then
+	#       die "${cmsg_ErroLeituraDisco}: ${AConfDisk[_DEVICE]}."
+	#     fi
+	#     replicate "=" "$COLUMNS"
+	#     if ! $LMKPARTED; then
+	#       echo "${yellow}${cwarning} ${red}${cmsg_todos_os_dados_serao_perdidos}${reset}"
+	#     fi
+	#   fi
+	# fi
 
 	#	if $LMKPARTED; then
 	#		return 0
@@ -2195,7 +2358,20 @@ sh_mkparted() {
 		#		fi
 
 		#   sh_checkSpaceToSwap
-		if ! sh_getPartitionsPercent; then
+		if $silent; then
+			# Chamado de dentro de sh_install com LVM/FDE já decidido — força os
+			# valores direto (não confia em AsDiskPercent estar correto nesse
+			# ponto por algum motivo ainda não identificado; já vimos esse
+			# array aparentemente certo e mesmo assim o cálculo falhar). Pra
+			# LFDE/LVM o layout é sempre o mesmo: tudo em root, resto zero.
+			AsDiskPercent[root]=100
+			AsDiskPercent[boot]=0
+			AsDiskPercent[swap]=0
+			AsDiskPercent[home]=0
+			withboot=false
+			withswap=false
+			withhome=false
+		elif ! sh_getPartitionsPercent; then
 			info "${AConfDisk[_DEVICE]} - ${cmsg_Disco^^} - AUTOMATIC" \
 				"\n$(gettext '✗ Particionamento e formatação automatica cancelado pelo usuário')"
 			return 1
@@ -2329,16 +2505,25 @@ sh_mkparted() {
 		parted --align=opt --script "${AConfDisk[_DEVICE]}" -- "$CSCRIPT" 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
 		evaluate_retval "${PIPESTATUS[0]}"
 		parted --align=opt --script "${AConfDisk[_DEVICE]}" -- print 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
+		sync 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
+		partprobe 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
+
+		# Limpa qualquer assinatura antiga (LUKS, ext4, etc.) que possa ter
+		# ficado gravada na mesma região de disco de uma partição anterior,
+		# já que mklabel recria só a tabela, não o conteúdo das partições.
+		for _p in "${!Amntpoint[@]}"; do
+			wipefs -a "$_p" >/dev/null 2>&1
+		done
+
 		Amkfs+=(["vfat"]="mkfs.vfat")
 		Amkfs+=(["swap"]="mkswap")
 		Amkfs+=(["ext4"]="mkfs.ext4")
 		LMKPARTED=true
+		LMKPARTED_DEVICE="${AConfDisk[_DEVICE]}"
 		LFS=true
 		LPARTITION=true
 		LFSREVISED=true
-		sync 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
-		partprobe 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
-		sh_check_disk_health "${AConfDisk[_DEVICE]}"
+		# sh_check_disk_health "${AConfDisk[_DEVICE]}"
 	else
 		die "${cmsg_InstalacaoAbortada}..."
 	fi
@@ -2434,10 +2619,10 @@ sh_update_hostname() {
 sh_update_rc_local() {
 	sh_cmd_job "${cmsg_Ajustando} rc.local" "
       cat > ${dir_install}/etc/rc.local <<-EOF
-#HOSTNAME="${AsUser[chostname]}"
-#HARDWARECLOCK="${AConfLocale[_CLOCK]}"
-#TIMEZONE="${AConfLocale[_TIMEZONE]}"
-#KEYMAP="${AConfLocale[_KEYMAP]}"
+HOSTNAME="${AsUser[chostname]}"
+HARDWARECLOCK="${AConfLocale[_CLOCK]}"
+TIMEZONE="${AConfLocale[_TIMEZONE]}"
+KEYMAP="${AConfLocale[_KEYMAP]}"
 #hwclock --systohc
 EOF
    " $err_not_fatal
@@ -2662,8 +2847,36 @@ strip_ansi() {
     '
 }
 
+# Remove os mesmos arquivos (ex: .desktop) em vários diretórios do sistema
+# de destino ($dir_install). Não falha se algo não existir (rm -f).
+# Uso: sh_remove_files_in_dirs files_array[@] dirs_array[@]
+#   local files=(a.desktop b.desktop)
+#   local dirs=(/usr/share/applications /usr/share/xsessions)
+#   sh_remove_files_in_dirs files dirs
+sh_remove_files_in_dirs() {
+	local -n _files="$1"
+	local -n _dirs="$2"
+	local f d
+	local cmd=""
+
+	for d in "${_dirs[@]}"; do
+		for f in "${_files[@]}"; do
+			cmd+="rm -f \"${dir_install}${d}/${f}\""$'\n'
+		done
+	done
+
+	sh_cmd_job "$(gettext 'Removendo arquivos')" "$cmd" "$err_not_fatal"
+}
+
 sh_make_user() {
 	local user="${AsUser[cuser]}"
+
+	sh_cmd_job "$(gettext 'Removendo link do instalador')" "
+    rm -f $dir_install/etc/skel/'Área de trabalho'/void-install.desktop
+    rm -f $dir_install/etc/skel/Área\ de\ trabalho/void-install.desktop
+    rm -f $dir_install/etc/skel/'Área de trabalho'/voidbr-install.desktop
+    rm -f $dir_install/etc/skel/Área\ de\ trabalho/voidbr-install.desktop
+  " $err_not_fatal
 
 	if [[ -n "${AsUser[cuser]}" ]]; then
 		if [[ -n "${AsUser[cfullname]}" ]]; then
@@ -2686,10 +2899,15 @@ sh_make_user() {
    " $err_not_fatal
 
 	sh_cmd_job "$(gettext 'Removendo link do instalador')" "
-        rm -f $dir_install/home/$user/'Área de trabalho'/void-install.desktop
-        rm -f $dir_install/home/$user/Área\ de\ trabalho/void-install.desktop
-        rm -f $dir_install//usr/share/applications/void-install.desktop
-   " $err_not_fatal
+    rm -f $dir_install/home/$user/'Área de trabalho'/void-install.desktop
+    rm -f $dir_install/home/$user/Área\ de\ trabalho/void-install.desktop
+    rm -f $dir_install/home/$user/'Área de trabalho'/voidbr-install.desktop
+    rm -f $dir_install/home/$user/Área\ de\ trabalho/voidbr-install.desktop
+  " $err_not_fatal
+
+	local _desktop_files=(voidbr-install.desktop void-install.desktop weston.desktop labwc.desktop)
+	local _desktop_dirs=(/usr/share/applications /usr/share/xsessions /usr/share/wayland-sessions)
+	sh_remove_files_in_dirs _desktop_files _desktop_dirs
 
 	sh_update_sudoers
 }
@@ -2764,6 +2982,25 @@ sh_make_fstab() {
 		#		evaluate_retval "$?"
 	else
 		sh_info_msb "${cmsg_Gerando} fstab pass1"
+		for i in "${!AmntpointFDE[@]}"; do
+			_part="$i"
+			label="$(sh_splitarray "${AmntpointFDE[$i]}" 1)"
+			fstype="$(sh_splitarray "${AmntpointFDE[$i]}" 2)"
+			format="$(sh_splitarray "${AmntpointFDE[$i]}" 3)"
+			size="$(sh_splitarray "${AmntpointFDE[$i]}" 4)"
+			mntpoint="$(sh_splitarray "${AmntpointFDE[$i]}" 5)"
+			#			echo "UUID=$(blkid -o value -s UUID "${_part}") $mntpoint ${fstype,,} defaults 0 0" >>"$dir_install/etc/fstab"
+			echo "UUID=$(blkid -o value -s UUID "${_part}") $mntpoint ${fstype,,} defaults,noatime,discard,lazytime 0 0" >>"$dir_install/etc/fstab"
+		done
+
+		# /boot/efi precisa vir DEPOIS das entradas acima no arquivo — se
+		# existir uma LV separada pra /boot (campo novo), o boot real monta
+		# seguindo a ordem do fstab, e /boot/efi mora DENTRO de /boot. Se a
+		# linha de /boot/efi viesse antes, o boot tentava montar ali sem
+		# /boot ainda existir como filesystem (confirmado em log real:
+		# "mount point does not exist"). No chroot da instalação isso nunca
+		# apareceu porque sh_mount_fs (função separada) já monta na ordem
+		# certa por conta própria — só a ordem GRAVADA no arquivo importava.
 		for i in "${!Amntpoint[@]}"; do
 			_part="$i"
 			mntpoint="$(sh_splitarray "${Amntpoint[$i]}" 1)"
@@ -2774,17 +3011,6 @@ sh_make_fstab() {
 				echo "UUID=$(blkid -o value -s UUID "${_part}") ${mntpoint} ${fstype,,} defaults 0 $fsorder" >>"$dir_install/etc/fstab"
 				break
 			fi
-		done
-
-		for i in "${!AmntpointFDE[@]}"; do
-			_part="$i"
-			label="$(sh_splitarray "${AmntpointFDE[$i]}" 1)"
-			fstype="$(sh_splitarray "${AmntpointFDE[$i]}" 2)"
-			format="$(sh_splitarray "${AmntpointFDE[$i]}" 3)"
-			size="$(sh_splitarray "${AmntpointFDE[$i]}" 4)"
-			mntpoint="$(sh_splitarray "${AmntpointFDE[$i]}" 5)"
-			#			echo "UUID=$(blkid -o value -s UUID "${_part}") $mntpoint ${fstype,,} defaults 0 0" >>"$dir_install/etc/fstab"
-			echo "UUID=$(blkid -o value -s UUID "${_part}") $mntpoint ${fstype,,} defaults,noatime,discard,lazytime 0 0" >>"$dir_install/etc/fstab"
 		done
 		#		evaluate_retval "$?"
 	fi
@@ -2805,17 +3031,40 @@ sh_activating_services() {
 	aServicesTTY+=(dbus sshd chronyd udevd uuidd dmeventd socklog-unix)
 	aServicesX+=()
 
-	if ! $LSERVER && ! $ONLY_TTY; then aServicesX+=(bluetoothd); fi
+	if ! $LSERVER && ! $LONLY_TTY; then
+		aServicesX+=(bluetoothd)
+	fi
 
 	for x in "${aDE[@]}"; do
 		case $x in
-		tty | server) continue ;;
+		tty | server | xorg) continue ;;
 		*)
-			aServicesX+=($_DISPLAYMANAGER)
+			[[ "$_DISPLAYMANAGER" != "None" ]] && aServicesX+=("$_DISPLAYMANAGER")
 			break
 			;;
 		esac
 	done
+
+	# Em local o runsvdir do destino veio inteiro no rsync do squashfs, já com
+	# o DM da ISO habilitado. Trocar de DM sem remover o link antigo deixa os
+	# dois disputando o tty7. Só acontece com LUPDATELOCAL, único caso em que
+	# sh_choose_dm abre o menu (6349).
+	#
+	# A lista acompanha o case de sh_configure_display_manager (721): DM novo
+	# lá, DM novo aqui.
+	#
+	# Roda antes do loop de aServicesX, que é quem cria o link do DM escolhido.
+	# O continue protege o escolhido, então se o usuário não trocou nada,
+	# nenhum link é removido.
+	if [[ "${AConfMirror[_SOURCE]}" = "local" ]] && $LUPDATELOCAL; then
+		for service in lightdm sddm gdm lxdm; do
+			[[ "$service" = "$_DISPLAYMANAGER" ]] && continue
+			sh_chroot_job "$(gettext 'Desativando serviço') $service" \
+				"rm -f /etc/runit/runsvdir/current/$service" \
+				"$err_not_fatal" \
+				"$level"
+		done
+	fi
 
 	for service in "${aServicesTTY[@]}"; do
 		sh_chroot_job "${cmsg_AtivandoServico} $service" \
@@ -2998,6 +3247,30 @@ sh_mk_working_dir() {
 	done
 }
 
+# Reabre o container LUKS/ativa o VG se necessário, usando os dados salvos
+# em AConfFde (partição, VG, senha). Cobre o caso de sh_mount_fs ser chamada
+# numa execução separada (--chroot/sh_dryrun) depois que o kernel, por
+# qualquer motivo, tenha fechado a sessão LUKS aberta durante a instalação
+# original (ex: reboot da VM). Idempotente: se já estiver aberto, não faz
+# nada.
+sh_ensure_luks_open() {
+	local mapper="/dev/mapper/${AConfFde[vg]}"
+	local target="/dev/${AConfFde[vg]}/root"
+
+	[[ -e "$target" ]] && return 0
+	[[ -n "${AConfFde[partition]}" && -n "${AConfFde[vg]}" ]] || return 1
+
+	if [[ ! -e "$mapper" ]]; then
+		sh_info_msg "$(gettext 'Reabrindo container LUKS') (${AConfFde[partition]})"
+		printf '%s' "${AConfFde[passphrase]}" | cryptsetup luksOpen "${AConfFde[partition]}" "${AConfFde[vg]}" --key-file=-
+		evaluate_retval "$?"
+	fi
+
+	vgchange -ay "${AConfFde[vg]}" >/dev/null 2>&1
+
+	[[ -e "$target" ]]
+}
+
 sh_mount_fs() {
 	local i
 	local _part
@@ -3017,6 +3290,7 @@ sh_mount_fs() {
 			fi
 		done
 	else
+		sh_ensure_luks_open
 		for i in "${!AmntpointFDE[@]}"; do
 			_part="$i"
 			label="$(sh_splitarray "${AmntpointFDE[$i]}" 1)"
@@ -3074,76 +3348,41 @@ sh_mount_fs() {
 	done
 }
 
-sh_common_theme() {
-	apkgs+=(
-		voidbr-wallpapers
-		voidbr-tokyo-theme
-		voidbr-dracula-theme
-		voidbr-professional-theme
-		voidbr-xfwm-axiom-theme
-		voidbr-beauty-icons
-	)
-}
-
 sh_X11_minimal() {
 	local apkgs=()
-	local aMedia=()
 
-	if ! $LHYPRLAND; then
-		apkgs+=("${aXorg[@]}")
-	fi
+	sh_install_pkgs_in_chroot "$(gettext 'Instalando META Pacote') voidbr-xorg-common" "voidbr-xorg-common"
+	sh_install_pkgs_in_chroot "$(gettext 'Instalando META Pacote') voidbr-gui-common" "voidbr-gui-common"
+}
 
-	apkgs+=("${aVideo[@]}")
-	apkgs+=("${aFonts[@]}")
-	apkgs+=("${aDisplaymanager[@]}")
-	apkgs+=("${aDisplaymanagerConfig[@]}")
-	apkgs+=("${aTerminal[@]}")
-	apkgs+=("${aFilemanager[@]}")
-	apkgs+=("${aBrowser[@]}")
-	apkgs+=("${aBluetooth[@]}")
-	apkgs+=("${aNetworkX[@]}")
-	apkgs+=("${aUtilityX[@]}")
-	apkgs+=("${aIconsAndThemes[@]}")
+sh_twm_minimal() {
+	local DE='TWM Desktop'
+	local apkgs=('twm')
+	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
+}
 
-	if $LAUDIO; then
-		apkgs+=("${aPulseaudio[@]}")
-		apkgs+=("${aPipewire[@]}")
-		aMedia+=("${aPulseaudio[@]}")
-		aMedia+=("${aPipewire[@]}")
-	fi
+sh_awesome_minimal() {
+	local DE='AWESOME Desktop'
+	local apkgs=(awesome polybar pcmanfm font-awesome)
+	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
+}
 
-	apkgs+=("${aPrinter[@]}")
-	apkgs+=("${aPerfumery[@]}")
-	apkgs+=("${aMicrocode[@]}")
-	apkgs+=("${aArchiverX[@]}")
-	apkgs+=("${aEditorX[@]}")
+sh_dwm_minimal() {
+	local DE='DWM Desktop'
+	local apkgs=(dwm)
+	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
+}
 
-	if ! $LHYPRLAND; then
-		sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Xorg')" "${aXorg[*]}"
-	fi
-
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Microde')" "${aMicrocode[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Video')" "${aVideo[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Rede')" "${aNetworkX[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Fontes')" "${aFonts[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Icones')" "${aIconsAndThemes[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM')" "${aDisplaymanager[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM Config')" "${aDisplaymanagerConfig[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Terminais')" "${aTerminal[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote FileManager')" "${aFilemanager[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Navegadores')" "${aBrowser[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Bluetooth')" "${aBluetooth[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Utilitários')" "${aUtilityX[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Media')" "${aMedia[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Impressoras')" "${aPrinter[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Perfumarias')" "${aPerfumery[*]}"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote Archivadores')" "${aArchiverX[*]}"
+sh_openbox_minimal() {
+	local DE='OPENBOX Desktop'
+	local apkgs=(openbox obconf)
+	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
 sh_fluxbox_meta_package() {
-	local DE='fluxbox'
+	local DE='FLUXBOX Desktop'
 	local apkgs=(voidbr-fluxbox)
-  apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-base-config)
 	apkgs+=(voidbr-fluxbox-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
@@ -3156,116 +3395,66 @@ sh_fluxbox_meta_package() {
 	fi
 }
 
-sh_openbox_minimal() {
-	local apkgs=(openbox obconf)
-	local DE='OpenBox'
-	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
-sh_plasma_minimal() {
-	local DE='Plasma Desktop'
-	local apkgs=(
-		kde5
-		plasma-desktop
-		plasma-nm
-		plasma-pa
-		plasma-disks
-		kate
-		konsole
-		dolphin
-	)
-
-	if $LCUSTOM; then
-		apkgs+=(
-			kf6-kaccounts-integration
-			kaccounts-providers
-			signon-kwallet-extension
-			ark
-			kwalletmanager
-			spectacle
-		)
-
-		apkgs+=(
-			voidbr-plasma-config
-		)
-
-		sh_common_theme
-
-	fi
+sh_plasma_meta_package() {
+	local DE='PLASMA Desktop'
+	local apkgs=(voidbr-plasma)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-plasma-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
-sh_cinnamon_minimal() {
-	local DE='cinnamon'
-	local apkgs=(cinnamon cinnamon-all)
-
-	if $LCUSTOM; then
-		apkgs+=(
-			plank
-			voidbr-cinnamon-config
-		)
-
-		sh_common_theme
-
-	fi
+sh_bspwm_meta_package() {
+	local DE='BSPWM Desktop'
+	local apkgs=(voidbr-bspwm)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-bspwm-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
-sh_enlightenment_minimal() {
-	local DE='Enlightenment'
-	local apkgs=(
-		enlightenment
-		efl
-		exquisite
-		connman
-	)
-
-	if $LCUSTOM; then
-		apkgs+=(
-			voidbr-enlightenment-config
-		)
-
-		sh_common_theme
-
-	fi
+sh_enlightenment_meta_package() {
+	local DE='ENLIGHTENMENT Desktop'
+	local apkgs=(voidbr-enlightenment)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-enlightenment-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
-sh_xfce_minimal() {
-	local DE='Xfce'
-	local apkgs=(
-		xfce4
-		xfce4-plugins
-		xfce4-screenshooter
-		xfce4-dict
-		xfce4-datetime-plugin
-		xfce4-pulseaudio-plugin
-	)
-
-	if $LCUSTOM; then
-		apkgs+=(
-			thunar-archive-plugin
-			ristretto
-			engrampa
-			file-roller
-			mate-calc
-			umc
-			plank
-			voidbr-xfce-config
-		)
-
-		sh_common_theme
-	fi
+sh_cinnamon_meta_package() {
+	local DE='CINNAMON Desktop'
+	local apkgs=(voidbr-cinnamon)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-cinnamon-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
-sh_server_minimal() {
-	local DE='Void server'
+sh_xfce_meta_package() {
+	local DE='XFCE Desktop'
+	local apkgs=(voidbr-xfce)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-xfce-config)
+
+	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
+}
+
+sh_base_meta_package() {
+	local DE='VoidBR Base'
 	declare apkgs=(
+		voidbr-base-common
+	)
+
+	if $LONLY_TTY; then
+		sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
+	fi
+}
+
+sh_server_meta_package() {
+	local DE='VoidBR Server'
+	declare apkgs=(
+		voidbr-base-common
 		bind-utils
 		ldns
 	)
@@ -3273,115 +3462,45 @@ sh_server_minimal() {
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
-sh_xorg_minimal() {
-	local DE='Xorg Minimal'
+sh_xorg_minimal_meta_package() {
+	local DE='Meta XORG Minimal'
 	declare apkgs=(
-		xorg-minimal
-		xinit
-		xterm
-		xorg-fonts
-		xorg-video-drivers
-		mesa-dri
+		voidbr-xorg-minimal
 	)
+
+	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
+	# Marcador do autostartx. Modo xorg é teste do stack X (servidor + xterm,
+	# sem WM nem DM); o if com startx vive no .bash_profile do
+	# voidbr-base-config e aqui fica só o gatilho, porque aquele arquivo é do
+	# pacote e é reescrito a cada reinstalação — o marcador não. No skel
+	# porque o useradd -m do sh_make_user, logo adiante, copia pro home.
+	local cfile="$dir_install/etc/skel/.voidbr-autostartx"
+
+	sh_info_msg "${cmsg_Ajustando} ${cfile}"
+	mkdir -p "$dir_install/etc/skel"
+	: >"$cfile"
+}
+
+sh_gnome_meta_package() {
+	local DE='GNOME Desktop'
+	local apkgs=(voidbr-gnome)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-gnome-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
-sh_gnome_minimal() {
-	local DE='Gnome'
-	local apkgs=(
-		"bluez"                    # Pilha de protocolos Bluetooth
-		"cantarell-fonts"          # Fonte oficial da interface GNOME
-		"colord"                   # Gerenciador de perfis de cores
-		"extension-manager"        # App para gerenciar extensões sem navegador
-		"gdm"                      # Gerenciador de login (Display Manager)
-		"gnome"                    # Meta-pacote Core (Shell, Nautilus, Control Center)
-		"gnome-apps"               # Suite de aplicativos padrão (Calculadora, Mapas, etc.)
-		"gnome-backgrounds"        # Papéis de parede oficiais do GNOME
-		"gnome-bluetooth"          # Interface de controle do Bluetooth no GNOME
-		"gnome-browser-connector"  # Integração do navegador com extensões do Shell
-		"gnome-characters"         # Utilitário de mapa de caracteres e emojis
-		"gnome-connections"        # Cliente nativo para conexões remotas RDP/VNC
-		"gnome-disk-utility"       # Utilitário para gerenciamento de discos e partições
-		"gnome-keyring"            # Gerenciador de senhas, chaves SSH e GPG
-		"gnome-online-accounts"    # Configuração central de contas externas
-		"gnome-session"            # Gerenciador de sessão do GNOME
-		"gnome-shell-extensions"   # Extensões oficiais fornecidas pelo projeto GNOME
-		"gnome-system-monitor"     # Monitor de processos e recursos do sistema
-		"gnome-terminal"           # Emulador de terminal padrão do GNOME
-		"gnome-themes-extra"       # Temas extras para compatibilidade GTK2 e GTK3
-		"mime-types"               # Fornece o arquivo compartilhado /etc/mime.types
-		"papirus-icon-theme"       # Conjunto de ícones Papirus
-		"polkit"                   # Framework para definição de privilégios
-		"simple-scan"              # Utilitário de digitalização de documentos
-		"tracker3"                 # Motor de busca e indexação de arquivos
-		"tracker3-miners"          # Extratores de metadados para busca do Tracker
-		"xdg-desktop-portal-gnome" # Integração de interface e permissões para Wayland
-		"xdg-user-dirs-gtk"        # Gerenciamento automático das pastas padrão de usuário
-		"accountsservice"          # D-Bus interfaces for querying and manipulating user account information
-	)
-
-	if $LCUSTOM; then
-		apkgs+=(dconf-editor devhelp Endeavour evolution five-or-more four-in-a-row geary
-			gedit ghex glade3 gnome-boxes gnome-builder gnome-chess gnome-games-collection
-			gnome-klotski gnome-mahjongg gnome-multi-writer gdm-settings
-			gnome-nettool gnome-nibbles gnome-robots gnome-sound-recorder gnome-sudoku
-			gnome-taquin gnome-tetravex gnome-tweaks gnome-usage hitori iagno lightsoff
-			polari quadrapassel swell-foop sysprof tali
-		)
-		apkgs+=(
-			voidbr-gnome-config
-			voidbr-change-gnome-wallpaper
-		)
-
-		sh_common_theme
-	fi
-
-	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
-sh_i3_minimal() {
-	local DE='I3'
-	local apkgs=(
-		i3
-		i3status # Status bar generator for i3bar, dzen2, xmobar or similar programs
-		dmenu    # Generic menu for X
-		#   i3lock-color
-		i3lock     # Improved screenlocker based upon XCB and PAM
-		volumeicon # Lightweight volume control that sits in your systray
-		mc         # User-friendly file manager and visual shell
-		scrot      # Simple command-line screenshot utility for X
-		mpv        # Video player based on MPlayer/mplayer2
-		cava       # Audio Visualizer for ALSA
-		pcmanfm    # LXDE file manager
-		alacritty
-		mate-themes
-		gnome-themes-standard
-		voidbr-i3wm-config
-		autotiling
-		azote
-		bumblebee-status
-		i3-gaps
-		i3blocks
-		xss-lock
-		j4-dmenu-desktop
-		nitrogen
-		dex
-		xfce4-screenshooter
-		font-awesome
-		Thunar
-		rofi
-		feh
-		picom
-		flameshot
-		polybar
-	)
+sh_i3_meta_package() {
+	local DE='I3 Desktop'
+	local apkgs=(voidbr-i3)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-i3wm-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
 sh_mango_meta_package() {
-	local DE='Mango'
+	local DE='MANGO Desktop'
 	local apkgs=(voidbr-mango)
 	apkgs+=(voidbr-base-config)
 	apkgs+=(voidbr-mango-config)
@@ -3390,7 +3509,7 @@ sh_mango_meta_package() {
 }
 
 sh_sway_meta_package() {
-	local DE='Sway'
+	local DE='SWAY Desktop'
 	local apkgs=(voidbr-sway)
 	apkgs+=(voidbr-base-config)
 	apkgs+=(voidbr-sway-config)
@@ -3399,7 +3518,7 @@ sh_sway_meta_package() {
 }
 
 sh_hyprland_meta_package() {
-	local DE='hyprland'
+	local DE='HYPRLAND Desktop'
 	local apkgs=(voidbr-hyprland)
 	apkgs+=(voidbr-base-config)
 	apkgs+=(voidbr-hyprland-config)
@@ -3407,140 +3526,38 @@ sh_hyprland_meta_package() {
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
-sh_river_minimal() {
-	local DE='river'
-	local apkgs=(river yambar fuzzel voidbr-river-config)
+sh_river_meta_package() {
+	local DE='RIVER Desktop'
+	local apkgs=(voidbr-river)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-river-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
-sh_mate_minimal() {
-	local DE='Mate'
-	local apkgs=(mate
-		mate-applets
-		mate-common
-		mate-extra
-		mate-backgrounds
-		mate-calc
-		mate-icon-theme-faenza
-		mate-media
-		mate-netbook
-		mate-power-manager
-		mate-screensaver
-		mate-sensors-applet
-		mate-system-monitor
-		mate-terminal
-		mate-utils
-		atril
-		caja-image-converter
-		caja-open-terminal
-		caja-sendto
-		caja-share
-		caja-wallpaper
-		caja-xattr-tags
-		engrampa
-		eom
-		mozo
-		pluma
-	)
-
-	if $LCUSTOM; then
-		apkgs+=(
-			plank
-			brisk-menu
-			voidbr-mate-config
-		)
-
-		sh_common_theme
-	fi
+sh_mate_meta_package() {
+	local DE='MATE Desktop'
+	local apkgs=(voidbr-mate)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-mate-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
-sh_twm_minimal() {
-	local DE='TWM'
-	local apkgs=('twm')
-
-	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
-sh_awesome_minimal() {
-	local DE='Awesome'
-	local apkgs=(awesome polybar pcmanfm font-awesome)
-
-	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
-sh_bspwm_minimal() {
-	local DE='Bspwm'
-	local apkgs=(bspwm
-		polybar
-		sxhkd
-		dunst
-		flameshot
-		picom
-		feh
-		dmenu
-		lua
-		wmctrl
-		compton
-		mpd
-		font-weather-icons
-		font-awesome5
-		hsetroot
-		lxappearance
-		rofi
-		gtk-engine-murrine
-		gtk2-engines
-	)
-
-	if $LCUSTOM; then
-		apkgs+=(
-			chili-void-bspwm-skel
-		)
-	fi
-
-	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
-sh_dwm_minimal() {
-	local DE='Dwm'
-	local apkgs=(dwm)
-
-	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
-sh_lxde_minimal() {
-	local DE='Lxde'
-	local apkgs=(lxde lxterminal lxrandr lxtask lxinput lxappearance)
+sh_lxde_meta_package() {
+	local DE='LXDE Desktop'
+	local apkgs=(voidbr-lxde)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-lxde-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
 sh_lxqt_minimal() {
-	local DE='Lxqt'
+	local DE='LXQT Desktop'
 	local apkgs=(lxqt)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
-sh_make_bspwm_conf() {
-	local user="${AsUser[cuser]}"
-	shell='/bin/bash'
-
-	sh_chroot_job "${cmsg_Configurando} Bspwm" "
-      mkdir -p /home/$user/.config/{bspwm,polybar,sxhkd} &&
-		cp -R /usr/share/doc/bspwm/examples/* /home/$user/.config/bspwm/ &&
-		cp /usr/share/examples/polybar/config.ini /home/$user/.config/polybar/ &&
-		cp /usr/share/doc/bspwm/examples/sxhkdrc /home/$user/.config/sxhkd/ &&
-		echo '#!/usr/bin/env bash'  >> /home/$user/.config/polybar/launch.sh &&
-		echo 'polybar-msg cmd quit' >> /home/$user/.config/polybar/launch.sh &&
-		echo 'echo "---" | tee -a /tmp/polybar1.log /tmp/polybar2.log' >> /home/$user/.config/polybar/launch.sh &&
-		echo 'polybar example 2>&1 | tee -a /tmp/polybar1.log & disown' >> /home/$user/.config/polybar/launch.sh &&
-   	echo '~/.config/polybar/launch.sh' >> /home/$user/.config/bspwm/bspwmrc &&
-    chmod +x /home/$user/.config/polybar/launch.sh &&
-   	chown $user:$user /home/$user/.config -R
-   " "$err_not_fatal"
 }
 
 sh_backup_partitions() {
@@ -3589,49 +3606,76 @@ sh_vg_info() {
 	done < <(vgs --noheadings --units G -o vg_name,vg_size,vg_free,vg_attr | awk '/^ *[[:alnum:]]+ / {print "NAME=\"" $1 "\"", "SIZE=\"" $2 "\"", "FREE=\"" $3 "\"", "ATTR=\"" $4 "\""}' | sort -k1,1 -k2,2)
 }
 
-sh_disk_info() {
-	unset ARRAY_DSK_{DISKS,DEVICES,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE}
-	local {TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE}_
-
-	mensagem "$(gettext "=== DISCO ===")" "\n\n${BOLD}${WHITE}$(gettext 'Aguarde... coletando informações')"
-
-	AARRAY_DSK_DEVICES=()
-
+# Constrói o mapa completo (todo dispositivo, sem filtro) de tipo e pai —
+# usado por sh_is_nested_lvm pra descobrir se uma LV está aninhada dentro
+# de outra (ex: uma LV que mora numa partição que por sua vez é parte de
+# outra LV — resultado de instalação anterior em cascata).
+declare -gA _kname_type=()
+declare -gA _kname_pkname=()
+sh_populate_nested_lvm_map() {
+	local _kn _tp _pk
+	_kname_type=()
+	_kname_pkname=()
 	while IFS= read -r line; do
-		unset TYPE_ NAME_ PATH_ SIZE_ TRAN_ MODEL_ LABEL_ SERIAL_ PTTYPE_ FSTYPE_
+		unset _kn _tp _pk
+		eval "$line"
+		_kname_type["$_kn"]="$_tp"
+		_kname_pkname["$_kn"]="$_pk"
+	done < <(lsblk -Po KNAME,TYPE,PKNAME | sed -E 's/KNAME=/_kn=/; s/TYPE=/_tp=/; s/PKNAME=/_pk=/')
+}
 
-		eval "${line//=/_=}"
-
-		ARRAY_DSK_DISKS+=("$NAME_")
-		ARRAY_DSK_DEVICES+=("$PATH_")
-		ARRAY_DSK_SIZE+=("$SIZE_")
-		ARRAY_DSK_TRAN+=("${TRAN_:-${TYPE_}}")
-		ARRAY_DSK_MODEL+=("${MODEL_:-${TYPE_} device}")
-		ARRAY_DSK_LABEL+=("${LABEL_:-""}")
-		ARRAY_DSK_SERIAL+=("${SERIAL_:-""}")
-		ARRAY_DSK_PTTYPE+=("${PTTYPE_:-""}")
-		ARRAY_DSK_FSTYPE+=("${FSTYPE_:-none}")
-		AARRAY_DSK_DEVICES["$PATH_"]="$NAME_|$SIZE_|${TRAN_:-${TYPE_}}|${MODEL_:-unknown}|${LABEL_:-""}|${SERIAL_:-""}|${PTTYPE_:-""}|${FSTYPE_:-none}"
-	done < <(
-		lsblk -PAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE |
-			grep -P 'TYPE="(disk|loop|lvm)"' |
-			grep -Pv 'NAME=".*(_tdata|-data|_tmeta|-tpool)"' |
-			awk -F'"' '!seen[$6]++'
-	)
-	#	done < <(lsblk -PAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE | grep -P 'TYPE="(disk|loop|lvm)"' | sort -k5,5 -k2,2)
+# Sobe a cadeia de pais (até 6 níveis) procurando o padrão específico:
+# LV cujo pai é uma PARTIÇÃO, e essa partição pertence a OUTRA LV — isso
+# sim é aninhamento de instalação anterior (ex: voidbrvm-root dentro de
+# uma partição de pve-lvm). Não confundir com LV sendo filha direta de
+# outra LV (ex: pool thin) — isso é arquitetura normal do LVM, comum a
+# praticamente toda LV do sistema, não deve ser filtrado.
+#
+# ATENÇÃO — bug real já cometido aqui: uma primeira versão marcava como
+# "aninhado" qualquer LV com UM ancestral LVM em qualquer nível acima,
+# sem checar se havia uma partição no meio. Isso filtrava incorretamente
+# TODAS as LVs de um mesmo pool thin (ex: pve-lvm, pve-evili,
+# pve-voidbr--*), já que elas compartilham o mesmo pool (dm-2) como
+# ancestral — sumindo com discos válidos da lista. A checagem precisa
+# ser exatamente "pai é partição E avô é LV", não "algum ancestral é LV".
+#
+# Outro bug real já cometido: essa lógica ficou presa dentro de
+# sh_disk_info, que não é chamada em lugar nenhum (código morto) — a
+# tela de escolha de disco de verdade usa sh_disk_part_info. Por isso
+# virou função independente, reaproveitável pelas duas.
+sh_is_nested_lvm() {
+	local kname="$1"
+	local parent="${_kname_pkname[$kname]}"
+	local grandparent
+	local depth=0
+	while [[ -n "$parent" && $depth -lt 6 ]]; do
+		if [[ "${_kname_type[$parent]}" = "part" ]]; then
+			grandparent="${_kname_pkname[$parent]}"
+			[[ "${_kname_type[$grandparent]}" = "lvm" ]] && return 0
+		fi
+		parent="${_kname_pkname[$parent]}"
+		((depth++))
+	done
+	return 1
 }
 
 sh_disk_part_info() {
 	unset ARRAY_DSK_{DISKS,DEVICES,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE}
 	unset ARRAY_PART_{DISKS,DEVICES,SIZE,TRAN,MODEL,LABEL,SERIAL,FSTYPE,PARTTYPENAME}
-	local {NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE,PARTTYPENAME}_
+	local {NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE,PARTTYPENAME,KNAME}_
 
 	mensagem "$(gettext "=== DISCO/PARTIÇÃO ===")" "\n\n${BOLD}${WHITE}$(gettext "Aguarde... coletando informações")"
 	AARRAY_DSK_DEVICES=()
 	AARRAY_PART_DEVICES=()
+	sh_populate_nested_lvm_map
 	while read -r line; do
 		eval "${line//=/_=}"
 		if [[ "${TYPE_}" != "part" ]]; then
+			# Uma LV que mora dentro de uma partição de outra LV é resultado de
+			# instalação anterior em cascata, não um disco de verdade pra
+			# oferecer como opção aqui (ver sh_is_nested_lvm acima).
+			[[ "${TYPE_}" = "lvm" ]] && sh_is_nested_lvm "$KNAME_" && continue
+
 			ARRAY_DSK_DISKS+=("$NAME_")
 			ARRAY_DSK_DEVICES+=("$PATH_")
 			ARRAY_DSK_SIZE+=("$SIZE_")
@@ -3646,7 +3690,9 @@ sh_disk_part_info() {
 		fi
 		if [[ "${TYPE_}" = "part" ]]; then
 			[[ "$FSTYPE_" = "iso9660" ]] && continue
-			#		[[ "$FSTYPE_" = "crypto_LUKS" ]] && continue
+			# Nunca oferecer uma partição LUKS existente como opção de
+			# mountpoint manual (não é reaproveitável, ver sh_has_luks_remnant).
+			[[ "$FSTYPE_" = "crypto_LUKS" ]] && continue
 			#		[[ "$FSTYPE_"  = "LVM2_member" ]] && continue
 			ARRAY_PART_DISKS+=("$NAME_")
 			ARRAY_PART_DEVICES+=("$PATH_")
@@ -3659,7 +3705,7 @@ sh_disk_part_info() {
 			ARRAY_PART_PARTTYPENAME+=("${PARTTYPENAME_:-none}")
 			AARRAY_PART_DEVICES+=(["$PATH_"]="$NAME_|$SIZE_|${TRAN_:-${TYPE_}}|${MODEL_:-unknown}|${LABEL_:-""}|${SERIAL_:-""}|${FSTYPE_:-"none"}|${PARTTYPENAME_:-none}")
 		fi
-	done < <(lsblk -PAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE,PARTTYPENAME |
+	done < <(lsblk -PAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE,PARTTYPENAME,KNAME |
 		grep -P 'TYPE="(disk|loop|lvm|part)"' |
 		grep -Pv 'NAME=".*(_tdata|-data|_tmeta|-tpool)"' |
 		sort -u -t'"' -k6,6)
@@ -3675,7 +3721,8 @@ sh_part_info() {
 	while read -r line; do
 		eval "${line//=/_=}"
 		[[ "$FSTYPE_" = "iso9660" ]] && continue
-		#		[[ "$FSTYPE_" = "crypto_LUKS" ]] && continue
+		# Mesmo motivo de sh_disk_part_info: LUKS existente não é opção válida.
+		[[ "$FSTYPE_" = "crypto_LUKS" ]] && continue
 		[[ "$FSTYPE_" = "LVM2_member" ]] && continue
 		ARRAY_PART_DISKS+=("$NAME_")
 		ARRAY_PART_DEVICES+=("$PATH_")
@@ -4061,8 +4108,22 @@ sh_chooseSource() {
 	cextra="${cmsg_ExtraNotIso}"
 
 	_src=${AConfMirror[_SOURCE]}
+
+	if ! $LHAS_INTERNET; then
+		# Sem internet ao entrar na tela: não dá pra deixar network/networkFull
+		# desativados de verdade (dialog radiolist não suporta isso), mas dá
+		# pra pelo menos vir com "local" pré-marcado, já que é a única opção
+		# que realmente funciona nesse caso. Usa a flag já calculada
+		# (arranque, ou pela última vez que o item "Wifi" foi configurado),
+		# sem pingar de novo aqui.
+		_src="local"
+		alerta "=== ${cmsg_Source^^} ===" \
+			"\n${BOLD}$(gettext 'Sem conexão com a internet no momento.')" \
+			"\n$(gettext 'Somente a instalação local (via ISO) será possível.')"
+	fi
+
 	for x in "${!Asource[@]}"; do
-		if [[ $_src = $x ]]; then
+		if [[ "$_src" = "$x" ]]; then
 			Aflag[$x]='on'
 		else
 			Aflag[$x]='off'
@@ -4081,7 +4142,7 @@ sh_chooseSource() {
 
 	while true; do
 		src=$(${DIALOG} --title "=== ${cmsg_Source^^} ===" \
-			--default-item "${AConfMirror[_SOURCE]}" \
+			--default-item "$_src" \
 			--stdout \
 			--colors \
 			--cancel-label "${cmsg_ButtonBack}" \
@@ -4096,6 +4157,14 @@ sh_chooseSource() {
 			;;
 		"$D_OK")
 			#dom 03 mar 2024 17:00:23 -04
+			if [[ "$src" = "network" || "$src" = "networkFull" ]]; then
+				if ! $LHAS_INTERNET; then
+					alerta "=== ${cmsg_Source^^} ===" \
+						"\n${BOLD}$(gettext 'Sem conexão com a internet. Escolha "local" ou configure a rede primeiro.')"
+					continue
+				fi
+			fi
+
 			if [[ "$src" = "networkFull" ]]; then
 				if ! sh_checkcommand "${XBPS_INSTALL_CMD}"; then
 					alerta "=== ${cmsg_Source^^} ===" \
@@ -4103,19 +4172,62 @@ sh_chooseSource() {
 					continue
 				fi
 			fi
+
 			if [[ "$src" = "local" ]]; then
 				if ! sh_getIso; then
-					info "$ccabec" "\n\n$cextra"
+					alerta "=== ${cmsg_Source^^} ===" "\n\n$cextra"
 					continue
 				else
-					alerta "=== ${cmsg_Source^^} ===" \
-						"$(gettext "Ao escolher ${CYAN}local${RESET} e usar a ${YELLOW}ISO oficial do Void${RESET}, \ntenha em mente que a ISO ${RED}tem pacotes desatualizados${RESET}, \ne será necessário atualizar pela internet.\n\nTalvez seja melhor escolher network ou networkfull!\n")"
 					LSOURCE=true
+
+					# Guarda a escolha do menu Wm pra devolver se o usuário
+					# voltar pra rede. A guarda do 'local' evita que entrar
+					# duas vezes seguidas em local salve 'local' por cima da
+					# escolha real.
+					if [[ "${_WINDOWMANAGER[0]}" != "local" ]]; then
+						_WM_SAVE=("${_WINDOWMANAGER[@]}")
+						_LONLY_TTY_SAVE="$LONLY_TTY"
+						_DM_SAVE="$_DISPLAYMANAGER"
+					fi
+
+					_WINDOWMANAGER=('local')
 					AConfMirror[_SOURCE]=$src
-					_WINDOWMANAGER=('tty' 'local')
 					LONLY_TTY=false
-					set_custom_install "=== ${cmsg_Source^^} ==="
+					sh_ask_update_local
+
+					if $LUPDATELOCAL; then
+						set_custom_install "=== ${cmsg_Source^^} ==="
+					else
+						# 100% offline: customizar exigiria instalar pacotes
+						# extras via rede (a lista inteira de
+						# sh_choose_custom_packages é software que não vem no
+						# squashfs do live), o que quebraria a promessa de não
+						# tocar em rede.
+						LCUSTOM=false
+					fi
 				fi
+			elif [[ "${AConfMirror[_SOURCE]}" = "local" ]]; then
+				# Só entra aqui quem está SAINDO de local para rede.
+				# AConfMirror[_SOURCE] ainda tem o valor antigo neste ponto —
+				# a atribuição definitiva está depois do esac.
+				#
+				# _WM, LMETA e as L<wm> não são tocadas pelo caminho local, então
+				# já estão coerentes com o _WINDOWMANAGER restaurado.
+				if ((${#_WM_SAVE[@]})); then
+					_WINDOWMANAGER=("${_WM_SAVE[@]}")
+					LONLY_TTY="$_LONLY_TTY_SAVE"
+					_DISPLAYMANAGER="$_DM_SAVE"
+					_WM_SAVE=()
+				else
+					# Nada guardado: sessão que já abriu em local, vinda de .conf
+					_WINDOWMANAGER=('tty')
+					_WM='tty'
+					_DISPLAYMANAGER='None'
+					LONLY_TTY=true
+				fi
+
+				LUPDATELOCAL=false
+				LWM=true
 			fi
 			;;
 		esac
@@ -4186,6 +4298,18 @@ sh_choose_audioserver() {
 	local x
 	local caudio
 
+	if [[ "${AConfMirror[_SOURCE]}" = "local" ]] && ! $LCUSTOM; then
+		alerta "=== ${cmsg_DefinirAudioServer^^} ===" "$(gettext 'Instalação escolhida foi via local/ISO, não é necessário alterar nada aqui.')"
+		LAUDIO=true
+		return 0
+	fi
+
+	if $LONLY_TTY; then
+		alerta "=== ${cmsg_DefinirAudioServer^^} ===" "${YELLOW}${_WM}${RST} => $(gettext "A instalação escolhida não necessita alterar nada aqui.")"
+		LAUDIO=true
+		return
+	fi
+
 	if ! $LONLY_TTY; then
 		case "${AConfAudio[_AUDIOSERVER]:-Pipewire}" in
 		Pulseaudio)
@@ -4241,6 +4365,16 @@ sh_choose_kernel() {
 	local ckernel
 	local current_kernel="${AConfKernel[_KERNEL]:-linux}"
 
+	if [[ "${AConfMirror[_SOURCE]}" = "local" ]] && ! $LCUSTOM; then
+		# Diferente do Wm: aqui, se customizar (LCUSTOM=true), o kernel
+		# escolhido É instalado de verdade via rede (array akernel). Só
+		# bloqueia quando for 100% offline, onde trocar de kernel aqui não
+		# teria efeito nenhum (nenhuma reinstalação acontece).
+		alerta "=== ${cmsg_descKernel^^} ===" "$(gettext 'Instalação escolhida foi via local/ISO, não é necessário alterar nada aqui.')"
+		LKERNEL=true
+		return 0
+	fi
+
 	array+=("linux" "Linux kernel and modules current default" "$([[ $current_kernel == linux ]] && echo on || echo off)")
 	array+=("linux7.2" "Linux kernel and modules (7.2 series) stable" "$([[ $current_kernel == linux7.2 ]] && echo on || echo off)")
 	array+=("linux7.1" "Linux kernel and modules (7.1 series) stable" "$([[ $current_kernel == linux7.1 ]] && echo on || echo off)")
@@ -4282,7 +4416,7 @@ sh_choose_bootloadernew() {
 	local cloader
 	local current_loader="${AConfBootLoader[_LOADER]:-grub}"
 
-	array+=("grub" "$(gettext 'GRand Unified Bootloader 2')" "$([[ $current_loader == grub ]] && echo on || echo off)")
+	array+=("grub" "$(gettext 'GRand Unified Bootloader 2 (recomendado)')" "$([[ $current_loader == grub ]] && echo on || echo off)")
 	array+=("limine" "$(gettext 'Modern, secure, portable, multiprotocol bootloader and boot manager')" "$([[ $current_loader == limine ]] && echo on || echo off)")
 
 	cloader=$(${DIALOG} \
@@ -4305,7 +4439,7 @@ sh_choose_bootloadernew() {
 	LLOADER=true
 	AConfBootLoader[_LOADER]="$cloader"
 
-  sh_chooseBootLoader
+	sh_chooseBootLoader
 
 	return 0
 }
@@ -4813,6 +4947,19 @@ ${BOLD}MODEL   : ${RESET}${RED}${MODEL_ORIGEM}${RESET}\n" \
 			sh_mkparted
 			grafico=$oldgrafico
 			sh_disk_part_info
+
+			# $LFDE/$LVM já foram decididos dentro de sh_getPartitionsPercent
+			# (chamada por sh_mkparted, via sh_ask_partition_mode). Se o usuário
+			# optou por LUKS ou LVM, encadeia direto na configuração de VG/LVs
+			# (senha também, se for LUKS), sem precisar que ele ache o menu
+			# "Fde"/"Lvm" manualmente depois.
+			if $LFDE; then
+				menu="Fde"
+				sh_confLvm
+			elif $LVM; then
+				menu="Lvm"
+				sh_confLvm
+			fi
 		fi
 		LAUTO=true
 		return 0
@@ -4826,17 +4973,17 @@ ${BOLD}MODEL   : ${RESET}${RED}${MODEL_ORIGEM}${RESET}\n" \
 }
 
 sh_getNvme() {
-  local segtype
-  local device="${AConfDisk[_DEVICE]}"
+	local segtype
+	local device="${AConfDisk[_DEVICE]}"
 
-  segtype="$(sudo lvs "$device" -o segtype --noheadings 2>/dev/null | tr -d ' ')"
+	segtype="$(sudo lvs "$device" -o segtype --noheadings 2>/dev/null | tr -d ' ')"
 
-  case "$segtype" in
-  thin | thin-pool)
-    echo ''
-    return
-    ;;
-  esac
+	case "$segtype" in
+	thin | thin-pool)
+		echo ''
+		return
+		;;
+	esac
 
 	local tran
 	local name
@@ -4974,9 +5121,11 @@ $(printf "%${nlen}s$sep%-4s$sep%-6s$sep%6s$sep%-6s$sep%-15s$sep%-30s" "DEVICE" "
 			#	    if [[ "$old_device" != "${AConfDisk[_DEVICE]}" || ! $LFSREVISED ]]; then
 			#	    if ! $LFSREVISED; then
 			#     if [[ "${#Amntpoint[@]}" -eq 0 ]]; then
-			if [[ "${AConfDisk[_DEVICE]}" != "${AsFs[_DEVICE]}" ]]; then
-				sh_rebuild_amntpoint_for_new_disk
-			fi
+			# Sempre reconstrói: não confiar em "${AsFs[_DEVICE]}" == mesmo disco,
+			# pois esse valor pode ter sido restaurado de uma execução anterior
+			# (/tmp/void-install.conf) enquanto o disco físico mudou de conteúdo
+			# (ex: já tem um LUKS de um teste anterior).
+			sh_rebuild_amntpoint_for_new_disk
 			AsFs[_DEVICE]="$sd"
 		}
 
@@ -5176,8 +5325,20 @@ sh_confadduser() {
 	local size
 	local model
 	local chostname
+	local usertext
+	local exit_status
+	local -a aUser
 
-	$LEXTRA && chostname="${AsUser[chostname]}" || chostname="${chostname_base}-${_WM}"
+	# O hostname automático acompanha a edição: sem isto, preencher a tela
+	# Extra antes de escolher o WM congela 'voidbr-base' (LEXTRA=true trava o
+	# recálculo). Nome digitado pelo usuário é preservado — só o que casa com
+	# o padrão gerado aqui é refeito.
+	chostname="${AsUser[chostname]}"
+	if [[ -z "$chostname" || "$chostname" == "${chostname_base,,}-"* ]]; then
+		chostname="${chostname_base}-$(sh_get_edition_label)"
+		chostname="${chostname,,}"
+	fi
+
 	sh_setUser
 	size=$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 2)
 	model=$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 4)
@@ -5206,12 +5367,20 @@ sh_confadduser() {
 			2>&1 1>&3)
 
 		exit_status=$?
+		# fd 3 só serve pro dialog acima; fechando aqui, nenhum return
+		# posterior precisa se lembrar dele.
+		exec 3>&-
+
 		case $exit_status in
 		"$D_ESC" | "$D_CANCEL")
 			return
 			;;
 		"$D_OK")
 			mapfile -t aUser <<<"$usertext"
+
+			# As validações reabrem o formulário via continue. Antes era
+			# recursão, e a chamada interna retornava para o meio da externa,
+			# que seguia rodando as validações seguintes até LEXTRA=true.
 			AsUser[cfullname]="${aUser[0]}"
 			AsUser[cuser]="${aUser[1]}"
 			AsUser[cpass]="${aUser[2]}"
@@ -5219,11 +5388,11 @@ sh_confadduser() {
 			AsUser[chostname]="${aUser[4]}"
 
 			if [[ "${AsUser[cuser]}" == "root" ]]; then
-				if ! conf "$(gettext "=== USUÁRIO ===")" "\n${cmsg_ adduser1}"; then
+				if ! conf "$(gettext "=== USUÁRIO ===")" "\n${cmsg_adduser1}"; then
 					die "$(gettext "=== USUÁRIO === ")" "${cmsg_adduserCancel}"
 					return 1
 				fi
-				sh_confadduser
+				continue
 			fi
 
 			if [[ -z "${AsUser[cuser]}" ]]; then
@@ -5231,7 +5400,7 @@ sh_confadduser() {
 					die "=== ${cmsg_Usuario^^} === " "${cmsg_adduserCancel}"
 					return 1
 				fi
-				sh_confadduser
+				continue
 			fi
 
 			# Verificar se usuario começa com um número
@@ -5240,7 +5409,7 @@ sh_confadduser() {
 					die "$(gettext "=== USUÁRIO === ")" "${cmsg_adduserCancel}"
 					return 1
 				fi
-				sh_confadduser
+				continue
 			fi
 
 			# Verificar se string1 começa com uma letra maiúscula
@@ -5249,7 +5418,7 @@ sh_confadduser() {
 					die "$(gettext "=== USUÁRIO === ")" "${cmsg_adduserCancel}"
 					return 1
 				fi
-				sh_confadduser
+				continue
 			fi
 
 			if [[ -z "${AsUser[cpass]}" ]]; then
@@ -5257,7 +5426,7 @@ sh_confadduser() {
 					die "=== ${cmsg_Usuario^^} ===" "${cmsg_adduserCancel}"
 					return 1
 				fi
-				sh_confadduser
+				continue
 			fi
 
 			if [[ -z "${AsUser[cpassroot]}" ]]; then
@@ -5265,12 +5434,11 @@ sh_confadduser() {
 					die "=== ROOT === " "${cmsg_adduserCancel}"
 					return 1
 				fi
-				sh_confadduser
+				continue
 			fi
 			LEXTRA=true
 			;;
 		esac
-		exec 3>&-
 		return 0
 	done
 }
@@ -5280,7 +5448,7 @@ sh_dryrun() {
 	sh_mount_fs
 	sh_init_bind
 
-  #sh_limineInstall
+	#sh_limineInstall
 	#sh_hack_hyprland_lib
 	#sh_configure_hyprland_audio
 	#sh_update_locale
@@ -5345,7 +5513,7 @@ sh_parseconf() {
 	fi
 
 	url_mirror="${AConfMirror[url_mirror]}"
-#	[[ -n "${AsUser[cuser]}" && -n "${AsUser[cpass]}" && -n "${AsUser[cpassroot]}" && -n "${AsUser[chostname]}" ]] && LEXTRA=true
+	#	[[ -n "${AsUser[cuser]}" && -n "${AsUser[cpass]}" && -n "${AsUser[cpassroot]}" && -n "${AsUser[chostname]}" ]] && LEXTRA=true
 	[[ -n "${AConfLocale[_TIMEZONE]}" ]] && LTIMEZONE=true
 	[[ -n "${AConfLocale[_KEYMAP]}" ]] && LKEYMAP=true
 	[[ -n "${AConfMirror[_MIRROR]}" && -n "$url_mirror" ]] && LMIRROR=true
@@ -5386,10 +5554,14 @@ sh_choose_wm() {
 	declare -A aFlag
 	declare -A aWm
 	local x
+	local wm
+	local exit_status
 
 	if [[ "${AConfMirror[_SOURCE]}" = "local" ]]; then
-		alerta "=== ${cmsg_Wm^^} ===" "$(gettext 'Instalação escolhida foi via local/ISO, não é necessário alterar nada aqui.')"
-		_WINDOWMANAGER='tty'
+		alerta "=== ${cmsg_Wm^^} ===" \
+			"$(gettext 'Instalação escolhida foi via local/ISO, não é necessário alterar nada aqui.
+       \nCaso queira escolher uma WM, então troque a Fonte para Network ou NetworkFull')"
+		_WINDOWMANAGER=('local')
 		LWM=true
 		return
 	fi
@@ -5397,6 +5569,7 @@ sh_choose_wm() {
 	aWm[tty]="${cmsg_tty}"
 	aWm[server]="${cmsg_server}"
 	aWm[xorg]="Xorg $(gettext "Minimal")"
+	aWm[bspwm]="$(gettext "Tiling window manager based on binary space partitioning")"
 	aWm[cinnamon]="Cinnamon"
 	aWm[enlightenment]="Enlightenment"
 	aWm[gnome]="Gnome"
@@ -5404,7 +5577,6 @@ sh_choose_wm() {
 	aWm[xfce]="Xfce 4"
 	aWm[mate]="Mate"
 	aWm[awesome]="Awesome"
-	aWm[bspwm]="Bspwm"
 	aWm[dwm]="Dwm"
 	aWm[fluxbox]="Fluxbox"
 	aWm[hyprland]="(Experimental) Hyprland"
@@ -5425,13 +5597,12 @@ sh_choose_wm() {
 		aFlag[$x]='on'
 	done
 
-	#		awesome "${aWm[awesome]}" "${aFlag[awesome]}" \
-	#		bspwm "${aWm[bspwm]}" "${aFlag[bspwm]}" \
-	#		dwm "${aWm[dwm]}" "${aFlag[dwm]}" \
-	#		lxde "${aWm[lxde]}" "${aFlag[lxde]}" \
-	#		lxqt "${aWm[lxqt]}" "${aFlag[lxqt]}" \
+	#  	awesome "${aWm[awesome]}" "${aFlag[awesome]}" \
+	#  	dwm "${aWm[dwm]}" "${aFlag[dwm]}" \
+	#  	lxde "${aWm[lxde]}" "${aFlag[lxde]}" \
+	#  	lxqt "${aWm[lxqt]}" "${aFlag[lxqt]}" \
+	#  	twm "${aWm[twm]}" "${aFlag[twm]}" \
 	#		openbox "${aWm[openbox]}" "${aFlag[openbox]}" \
-	#		twm "${aWm[twm]}" "${aFlag[twm]}" \
 
 	wm=$(${DIALOG} \
 		--backtitle "$ccabec" \
@@ -5440,21 +5611,23 @@ sh_choose_wm() {
 		--colors \
 		--cancel-label "${cmsg_ButtonBack}" \
 		--ok-label "${cmsg_Aceitar}" \
-		--checklist "${cmsg_MENU}" \
-		0 0 0 \
+		--radiolist "${cmsg_MENU}" \
+		23 0 100 \
 		tty "${aWm[tty]}" "${aFlag[tty]}" \
 		server "${aWm[server]}" "${aFlag[server]}" \
 		xorg "${aWm[xorg]}" "${aFlag[xorg]}" \
+		bspwm "${aWm[bspwm]}" "${aFlag[bspwm]}" \
 		cinnamon "${aWm[cinnamon]}" "${aFlag[cinnamon]}" \
 		enlightenment "${aWm[enlightenment]}" "${aFlag[enlightenment]}" \
 		fluxbox "${aWm[fluxbox]}" "${aFlag[fluxbox]}" \
 		gnome "${aWm[gnome]}" "${aFlag[gnome]}" \
+		hyprland "${aWm[hyprland]}" "${aFlag[hyprland]}" \
 		i3wm "${aWm[i3wm]}" "${aFlag[i3wm]}" \
+		lxde "${aWm[lxde]}" "${aFlag[lxde]}" \
+		mango "${aWm[mango]}" "${aFlag[mango]}" \
 		mate "${aWm[mate]}" "${aFlag[mate]}" \
 		plasma "${aWm[plasma]}" "${aFlag[plasma]}" \
 		sway "${aWm[sway]}" "${aFlag[sway]}" \
-		mango "${aWm[mango]}" "${aFlag[mango]}" \
-		hyprland "${aWm[hyprland]}" "${aFlag[hyprland]}" \
 		river "${aWm[river]}" "${aFlag[river]}" \
 		xfce "${aWm[xfce]}" "${aFlag[xfce]}" \
 		2>&1 >/dev/tty)
@@ -5467,85 +5640,145 @@ sh_choose_wm() {
 	esac
 
 	_WINDOWMANAGER=($(strtoarray "$wm"))
-	_WM="$wm"
 	LWM=true
-	LONLY_TTY=true
-	LSERVER=false
-	AConfAudio[_AUDIOSERVER]="None"
-	_DISPLAYMANAGER="None"
 
-	for wm in "${_WINDOWMANAGER[@]}"; do
-		case "$wm" in
-		tty)
-			LONLY_TTY=true
-			AConfAudio[_AUDIOSERVER]="None"
-			_DISPLAYMANAGER="None"
-			_WM="tty"
-			;;
-		xorg)
-			LONLY_TTY=true
-			LXORG=true
-			AConfAudio[_AUDIOSERVER]="None"
-			_DISPLAYMANAGER="None"
-			_WM="xorg"
-			break
-			;;
-		server)
-			LONLY_TTY=true
-			LSERVER=true
-			AConfAudio[_AUDIOSERVER]="None"
-			_DISPLAYMANAGER="None"
-			_WM="server"
-			break
-			;;
-		sway)
-			LONLY_TTY=false
-			AConfAudio[_AUDIOSERVER]="Pipewire"
-			_DISPLAYMANAGER="sddm"
-			LSWAY=true
-			_WM="$wm"
-			break
-			;;
-		mango)
-			LONLY_TTY=false
-			AConfAudio[_AUDIOSERVER]="Pipewire"
-			_DISPLAYMANAGER="sddm"
-			LMANGO=true
-			_WM="$wm"
-			break
-			;;
-		hyprland)
-			LONLY_TTY=false
-			AConfAudio[_AUDIOSERVER]="Pipewire"
-			_DISPLAYMANAGER="sddm"
-			LHYPRLAND=true
-			_WM="$wm"
-			break
-			;;
-		*)
-			LONLY_TTY=false
-			AConfAudio[_AUDIOSERVER]="Pipewire"
-			if grep -qi gnome <<<"${_WINDOWMANAGER[@]}"; then
-				_DISPLAYMANAGER="gdm"
-			else
-				_DISPLAYMANAGER="lightdm"
-			fi
-			_WM="$wm"
-			break
-			;;
+	# Se tiver qualquer WM/DE gráfico marcado, ele manda (o último, se mais de
+	# um foi marcado por engano) — tty/xorg/server só valem se nenhum WM de
+	# verdade estiver presente. Não depende de ordem/break de loop (era frágil:
+	# bastava "tty" vir marcado por padrão + o usuário marcar outro WM junto
+	# pra dar resultado errado dependendo da ordem de iteração).
+	LSWAY=false
+	LMANGO=false
+	LHYPRLAND=false
+	LXFCE=false
+	LI3=false
+	LFLUXBOX=false
+	LBSPWM=false
+	LLXDE=false
+	LGNOME=false
+	LPLASMA=false
+	LENLIGHTENMENT=false
+	LMATE=false
+	LCINNAMON=false
+	LXORG=false
+	LSERVER=false
+	LMETA=false
+
+	local _realwm=""
+	for x in "${_WINDOWMANAGER[@]}"; do
+		case "$x" in
+		tty | xorg | server) : ;;
+		*) _realwm="$x" ;;
 		esac
 	done
+
+	if [[ -n "$_realwm" ]]; then
+		_WM="$_realwm"
+		LONLY_TTY=false
+		AConfAudio[_AUDIOSERVER]="Pipewire"
+		case "$_realwm" in
+		sway)
+			_DISPLAYMANAGER="sddm"
+			LSWAY=true
+			LMETA=true
+			;;
+		mango)
+			_DISPLAYMANAGER="sddm"
+			LMANGO=true
+			LMETA=true
+			;;
+		hyprland)
+			_DISPLAYMANAGER="sddm"
+			LHYPRLAND=true
+			LMETA=true
+			;;
+		river)
+			_DISPLAYMANAGER="sddm"
+			LMETA=true
+			;;
+		xfce)
+			LXFCE=true
+			_DISPLAYMANAGER="lightdm"
+			LMETA=true
+			;;
+		i3wm)
+			LI3=true
+			_DISPLAYMANAGER="lightdm"
+			LMETA=true
+			;;
+		fluxbox)
+			LFLUXBOX=true
+			_DISPLAYMANAGER="lightdm"
+			LMETA=true
+			;;
+		bspwm)
+			LBSPWM=true
+			_DISPLAYMANAGER="lightdm"
+			LMETA=true
+			;;
+		lxde)
+			LLXDE=true
+			_DISPLAYMANAGER="lightdm"
+			LMETA=true
+			;;
+		gnome)
+			LGNOME=true
+			_DISPLAYMANAGER="lightdm"
+			LMETA=true
+			;;
+		plasma)
+			LPLASMA=true
+			_DISPLAYMANAGER="lightdm"
+			LMETA=true
+			;;
+		enlightenment)
+			LENLIGHTENMENT=true
+			_DISPLAYMANAGER="lightdm"
+			LMETA=true
+			;;
+		mate)
+			LMATE=true
+			_DISPLAYMANAGER="lightdm"
+			LMETA=true
+			;;
+		cinnamon)
+			LCINNAMON=true
+			_DISPLAYMANAGER="lightdm"
+			LMETA=true
+			;;
+		*)
+			_DISPLAYMANAGER="lightdm"
+			LMETA=false
+			;;
+		esac
+	elif [[ " ${_WINDOWMANAGER[*]} " == *" server "* ]]; then
+		_WM="server"
+		LONLY_TTY=true
+		LSERVER=true
+		LMETA=true
+		AConfAudio[_AUDIOSERVER]="None"
+		_DISPLAYMANAGER="None"
+	elif [[ " ${_WINDOWMANAGER[*]} " == *" xorg "* ]]; then
+		_WM="xorg"
+		LONLY_TTY=true
+		LMETA=false
+		LXORG=true
+		AConfAudio[_AUDIOSERVER]="None"
+		_DISPLAYMANAGER="None"
+	else
+		_WM="tty"
+		LONLY_TTY=true
+		LMETA=true
+		AConfAudio[_AUDIOSERVER]="None"
+		_DISPLAYMANAGER="None"
+	fi
 
 	set_custom_install "=== ${cmsg_Wm^^} ==="
 
 	LAUDIO=true
 	LDM=true
-
-	if grep -qi hyprland <<<"${_WINDOWMANAGER[@]}"; then
-		LHYPRLAND=true
-	fi
-
 	LDHCP=false
+
 	if $LSERVER; then
 		if conf "=== IP SERVER ===" \
 			"\n${BOLD}${WHITE}$(gettext "Uma instalação SERVIDOR foi escolhida")\n" \
@@ -5619,7 +5852,7 @@ sh_choose_custom_packages() {
 		aCustom['mpv']="$(gettext 'Video player based on MPlayer/mplayer2')"
 		aCustom['cool-retro-term']="$(gettext 'Good looking terminal emulator which mimics the old cathode display')"
 		aCustom['gparted']="$(gettext 'Gnome Partition Editor)')"
-		aCustom['voidbr-google-chrome']="$(gettext 'The popular web browser by Google (Stable Channel)')"
+		aCustom['google-chrome']="$(gettext 'The popular web browser by Google (Stable Channel)')"
 		aCustom['libreoffice']="$(gettext 'Productivity suite')"
 		aCustom['menulibre']="$(gettext 'Advanced menu editor')"
 		aCustom['mousepad']="$(gettext 'Simple text editor for Xfce based on Leafpad')"
@@ -5722,19 +5955,19 @@ sh_configure_dhcpcd_static_ip_dialog() {
 	sh_setAsDhcp
 
 	# formulário
+	local ncol=18
 	while true; do
-		exec 3>&1
 		dhcptext=$(dialog \
 			--backtitle "$ccabec" \
 			--title "$(gettext "Configuração de IP fixo (dhcpcd)")" \
 			--form "$(gettext "Preencha os dados:")" \
 			15 60 6 \
-			"$(gettext "Interface:")" 1 1 "${AsDhcp[IFACE]}" 1 25 20 0 \
-			"$(gettext "IP:")" 2 1 "${AsDhcp[IP]}" 2 25 20 0 \
-			"$(gettext "Máscara (CIDR):")" 3 1 "${AsDhcp[CIDR]}" 3 25 20 0 \
-			"$(gettext "Gateway:")" 4 1 "${AsDhcp[GATEWAY]}" 4 25 20 0 \
-			"$(gettext "DNS 1:")" 5 1 "${AsDhcp[DNS1]}" 5 25 20 0 \
-			"$(gettext "DNS 2:")" 6 1 "${AsDhcp[DNS2]}" 6 25 20 0 \
+			"Interface      : " 1 1 "${AsDhcp[IFACE]}" 1 $ncol 20 0 \
+			"IP             : " 2 1 "${AsDhcp[IP]}" 2 $ncol 20 0 \
+			"Máscara (CIDR) : " 3 1 "${AsDhcp[CIDR]}" 3 $ncol 20 0 \
+			"Gateway        : " 4 1 "${AsDhcp[GATEWAY]}" 4 $ncol 20 0 \
+			"DNS 1          : " 5 1 "${AsDhcp[DNS1]}" 5 $ncol 20 0 \
+			"DNS 2          : " 6 1 "${AsDhcp[DNS2]}" 6 $ncol 20 0 \
 			2>&1 >/dev/tty)
 
 		exit_status=$?
@@ -5753,12 +5986,12 @@ sh_configure_dhcpcd_static_ip_dialog() {
 			AsDhcp[DNS2]="${adhcp[5]}"
 
 			# mensagem confirmação
-			CONFIRM_MSG="$(printf "%s\n\n%s: %s\n%s: %s/%s\n%s: %s\n%s: %s %s" \
-				"${BOLD}${RED}$(gettext "Aplicar essas configurações?")" \
-				"${RESET}$(gettext "Interface")" "${AsDhcp[IFACE]}" \
-				"$(gettext "IP")" "${AsDhcp[IP]}" "${AsDhcp[CIDR]}" \
-				"$(gettext "Gateway")" "${AsDhcp[GATEWAY]}" \
-				"$(gettext "DNS")" "${AsDhcp[DNS1]}" "${AsDhcp[DNS2]}")"
+			CONFIRM_MSG="$(printf "%s\n\n%-20s: %s\n%-20s: %s/%s\n%-20s: %s\n%-20s: %s %s" \
+				"${BOLD}${RED}$(gettext "Aplicar essas configurações?")${RESET}" \
+				"$(gettext "Interface")" "${YELLOW}${AsDhcp[IFACE]}${RST}" \
+				"$(gettext "IP")" "${YELLOW}${AsDhcp[IP]}" "${AsDhcp[CIDR]}${RST}" \
+				"$(gettext "Gateway")" "${YELLOW}${AsDhcp[GATEWAY]}${RST}" \
+				"$(gettext "DNS")" "${YELLOW}${AsDhcp[DNS1]}" "${AsDhcp[DNS2]}${RST}")"
 
 			#   dialog --yesno "$CONFIRM_MSG" 12 50
 			if conf "=== DHCP ===" "$CONFIRM_MSG"; then
@@ -5766,7 +5999,6 @@ sh_configure_dhcpcd_static_ip_dialog() {
 			fi
 			;;
 		esac
-		exec 3>&-
 		return 0
 	done
 }
@@ -5813,6 +6045,18 @@ sh_choose_dm() {
 	declare -A aFlag
 	declare -A aDm
 	local x
+
+	if [[ "${AConfMirror[_SOURCE]}" = "local" ]] && ! $LUPDATELOCAL; then
+		alerta "=== ${cmsg_Dm^^} ===" "$(gettext 'Instalação escolhida foi via local/ISO, não é necessário alterar nada aqui.')"
+		LDM=true
+		return
+	fi
+
+	if $LONLY_TTY; then
+		alerta "=== ${cmsg_Dm^^} ===" "${YELLOW}${_WM}${RST} => $(gettext "A instalação escolhida não necessita alterar nada aqui.")"
+		LDM=true
+		return
+	fi
 
 	aDm[lxdm]="Leve e simples, ideal para computadores antigos, Xorg"
 	aDm[sddm]="Display manager moderno, Xorg e Wayland"
@@ -5982,14 +6226,16 @@ sh_getinfoFde() {
 	local str
 	local _vg
 	str="$(sh_getyes "$lfde")"
-	_vg="${AConfFde[vg]}"
 
 	case $lfde in
-	1)
-		str+="|$_vg|${AConfFde[partition]}|/$_vg/root=${AConfFde[lvroot]}"
-		[[ -n "${AConfFde[lvswap]}" ]] && str+="|/$_vg/swap=${AConfFde[lvswap]}"
-		[[ -n "${AConfFde[lvvar]}" ]] && str+="|/$_vg/var=${AConfFde[lvvar]}"
-		[[ -n "${AConfFde[lvhome]}" ]] && str+="|/$_vg/home=${AConfFde[lvhome]}"
+	1 | true)
+		_vg="${AConfFde[vg]}"
+		str+=" - VG:$_vg"
+		str+=" - LV root:${AConfFde[lvroot]}"
+		str+=" - LV boot:${AConfFde[lvboot]}"
+		str+=" - LV swap:${AConfFde[lvswap]}"
+		str+=" - LV var:${AConfFde[lvvar]}"
+		str+=" - LV home:${AConfFde[lvhome]}"
 		;;
 	esac
 	echo "$str"
@@ -6076,10 +6322,33 @@ sh_checkInstall() {
 		return 1
 	fi
 
-	if ! sh_check_mirror; then
-		DEFITEM="${cmsg_Mirror}"
-    sh_choose_mirror
-    return 1
+	# Em instalação local 100% offline (sem LUPDATELOCAL), o mirror nunca é
+	# usado — checar ele aqui bloquearia a instalação sem necessidade sempre
+	# que não houver internet, mesmo sendo exatamente esse o cenário que
+	# "local" sem atualização deveria suportar.
+	if [[ "${AConfMirror[_SOURCE]}" != "local" ]] || $LUPDATELOCAL; then
+		if ! sh_has_repo_online; then
+			alerta "=== ${cmsg_Mirror^^} ===" \
+				"\n${BOLD}$(gettext 'Os repositórios do VoidBR parecem estar fora do ar no momento (voidbr.org, voidlinux.com.br e chililinux.com não responderam).')" \
+				"\n$(gettext 'Escolha outro mirror manualmente na tela de Mirror, ou tente novamente mais tarde.')"
+			DEFITEM="${cmsg_Mirror}"
+			sh_choose_mirror
+			return 1
+		fi
+	fi
+
+	# _SOURCE pode ter virado "local" automaticamente (sh_check_internet, sem
+	# internet), sem o usuário nunca ter passado pela tela de Source — onde
+	# essa mesma checagem de ISO já existe. Sem isso, dava pra tentar instalar
+	# com _SOURCE=local sem ISO nenhuma disponível.
+	if [[ "${AConfMirror[_SOURCE]}" = "local" ]]; then
+		if ! sh_getIso; then
+			alerta "=== ${cmsg_Source^^} ===" \
+				"\n${BOLD}$(gettext 'Fonte "local" foi selecionada automaticamente (sem internet disponível), mas nenhuma ISO foi detectada no sistema para usar como fonte de pacotes.')" \
+				"\n$(gettext 'Conecte a internet (menu Wifi) e escolha network/networkFull na tela de Source, ou verifique se a ISO/pendrive está conectada corretamente.')"
+			DEFITEM="${cmsg_Source}"
+			return 1
+		fi
 	fi
 
 	display_config
@@ -6091,6 +6360,108 @@ sh_checkInstall() {
 		return 0
 	fi
 	return 1
+}
+
+# Configuração de boot com LUKS comum a qualquer bootloader (GRUB ou Limine):
+# grava /etc/crypttab e, opcionalmente, cria uma chave de desbloqueio
+# automático embutida na initramfs. Cada bootloader, depois de chamar esta
+# função, só precisa escrever o cmdline no seu próprio formato.
+#
+# $1 (usekeyfile, default "true"): se "true", cria /boot/volume.key e
+# configura o crypttab pra abrir sozinho, sem pedir senha na initramfs — só
+# faz sentido quando /boot fica DENTRO do container (GRUB com cryptodisk),
+# já que aí a senha real já foi pedida antes, pelo próprio bootloader, pra
+# ler o /boot. Se "false" (caso do Limine, onde /boot fica FORA do LUKS, numa
+# partição sem proteção nenhuma), a chave NÃO é criada — deixá-la ali seria
+# guardar a chave da porta bem ao lado da porta. Sem keyfile, o crypttab usa
+# "none" e o dracut pede a senha de verdade na initramfs, que é o esperado.
+sh_confLuksBoot() {
+	local usekeyfile="${1:-true}"
+	local xuuidfde
+
+	xuuidfde=$(blkid -o value -s UUID "${AConfFde[partition]}")
+	AConfFde[uuid]="$xuuidfde"
+
+	if [[ "$usekeyfile" == "true" ]]; then
+		sh_chroot_job "Criando chave aleatória" "dd bs=1 count=64 if=/dev/urandom of=/boot/volume.key"
+		sh_chroot_job "Adicionando a chave ao volume cryptografado" "printf ${AConfFde[passphrase]} | cryptsetup luksAddKey ${AConfFde[partition]} /boot/volume.key --key-file=-"
+		sh_chroot_job "Alterando permissões para proteger a chave" "chmod 000 /boot/volume.key; chmod -R g-rwx,o-rwx /boot"
+		echo "${AConfFde[vg]}	UUID=$xuuidfde	/boot/volume.key	luks" >>"$dir_install/etc/crypttab"
+		echo 'install_items+=" /boot/volume.key /etc/crypttab "' >>"$dir_install/etc/dracut.conf.d/10-crypt.conf"
+	else
+		echo "${AConfFde[vg]}	UUID=$xuuidfde	none	luks" >>"$dir_install/etc/crypttab"
+	fi
+}
+
+sh_set_edition_os_release() {
+	local name="$1"
+	local f="${dir_install}/etc/os-release"
+	sh_info_msg "${cmsg_Ajustando} $f"
+	[[ -f "$f" ]] || return 1
+	name="${name^}"
+	if grep -q '^EDITION=' "$f"; then
+		sed -i "s/^EDITION=.*/EDITION=\"$name\"/" "$f"
+	else
+		[[ -s "$f" ]] && [[ -n "$(tail -c1 "$f")" ]] && echo >>"$f"
+		echo "EDITION=\"$name\"" >>"$f"
+	fi
+}
+
+# Nome CRU da edição. Alimenta o SESSION_NAME do DM, por isso não normaliza
+# nada — 'tty' aqui tem que continuar 'tty'. Pra nome de exibição (bootloader,
+# os-release), use sh_get_edition_label.
+sh_get_edition() {
+	local distro_name
+
+	if [[ "${AConfMirror[_SOURCE]}" = "local" ]]; then
+		# EDITION do live: o squashfs é o que vai pro alvo, então a edição da
+		# ISO é a edição instalada. Aspas são opcionais e só a 1a linha conta.
+		distro_name=$(sed -n 's/^EDITION=//p' /etc/os-release | head -n1 | tr -d "\"'")
+	fi
+
+	# Sem fallback, um os-release sem EDITION devolveria string vazia e ela
+	# vazaria silenciosamente pro GRUB_DISTRIBUTOR, pro os-release do alvo e
+	# pro SESSION_NAME.
+	[[ -n "$distro_name" ]] || distro_name="$_WM"
+	[[ -n "$distro_name" ]] || distro_name="tty"
+
+	echo "${distro_name^}"
+}
+
+# Nome de EXIBIÇÃO da edição (GRUB, Limine e os-release do alvo). Único lugar
+# onde 'tty' vira 'Base' — antes essa conversão estava duplicada dentro de
+# sh_change_grub e sh_change_limine e faltava na gravação do os-release, o que
+# deixava o menu de boot em "VoidBR Base" e o os-release em EDITION="Tty".
+sh_get_edition_label() {
+	local distro_name
+
+	distro_name="$(sh_get_edition)"
+	[[ "${distro_name,,}" = tty ]] && distro_name="Base"
+	echo "${distro_name^}"
+}
+
+sh_change_grub() {
+	local f="${dir_install}/etc/default/grub"
+	local distro_name="$(sh_get_edition_label)"
+
+	sh_cmd_job "$(gettext 'Aplicando ajustes no GRUB')" "
+    sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR=\"VoidBR ${distro_name}\"/' '$f'
+  " "$err_not_fatal"
+}
+
+sh_change_limine() {
+	local f="${dir_install}/etc/default/limine"
+	local distro_name="$(sh_get_edition_label)"
+
+	sh_cmd_job "$(gettext 'Aplicando ajustes no Limine')" "
+    touch '$f'
+    if grep -q '^LIMINE_DISTRO_NAME=' '$f'; then
+      sed -i 's/^LIMINE_DISTRO_NAME=.*/LIMINE_DISTRO_NAME=\"VoidBR ${distro_name}\"/' '$f'
+    else
+      [ -s '$f' ] && [ -n \"\$(tail -c1 '$f')\" ] && echo >>'$f'
+      echo 'LIMINE_DISTRO_NAME=\"VoidBR ${distro_name}\"' >>'$f'
+    fi
+  " "$err_not_fatal"
 }
 
 sh_grubInstall() {
@@ -6105,7 +6476,7 @@ GRUB_DEFAULT=0
 #GRUB_HIDDEN_TIMEOUT=0
 #GRUB_HIDDEN_TIMEOUT_QUIET=false
 GRUB_TIMEOUT=5
-GRUB_DISTRIBUTOR="Void"
+GRUB_DISTRIBUTOR="VoidBR"
 # Uncomment to use basic console
 #GRUB_TERMINAL_INPUT="console"
 # Uncomment to disable graphical terminal
@@ -6130,18 +6501,23 @@ EOF
 	fi
 
 	if $LFDE; then
-		sh_chroot_job "Alterando /etc/default/grub" "sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=/#&/' /etc/default/grub"
-		xuuidfde=$(blkid -o value -s UUID "${AConfFde[partition]}")
+		sh_confLuksBoot
+		sh_chroot_job "Alterando /etc/default/grub" "
+		  sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=/#&/' /etc/default/grub
+    "
+
 		{
-			echo "GRUB_CMDLINE_LINUX_DEFAULT='splash quiet udev.log_priority=3 libata.noacpi=1 loglevel=4 rd.luks.allow-discards rd.lvm.vg=${AConfFde[vg]} rd.luks.uuid=$xuuidfde'"
+			echo "GRUB_CMDLINE_LINUX_DEFAULT='splash quiet udev.log_priority=3 libata.noacpi=1 loglevel=4 rd.luks.allow-discards rd.lvm.vg=${AConfFde[vg]} rd.luks.uuid=${AConfFde[uuid]}'"
 			echo "GRUB_ENABLE_CRYPTODISK=y"
 		} >>"$dir_install/etc/default/grub"
 
-		sh_chroot_job "Criando chave aleatória" "dd bs=1 count=64 if=/dev/urandom of=/boot/volume.key"
-		sh_chroot_job "Adicionando a chave ao volume cryptografado" "printf ${AConfFde[passphrase]} | cryptsetup luksAddKey ${AConfFde[partition]} /boot/volume.key --key-file=-"
-		sh_chroot_job "Alterando permissões para proteger a chave" "chmod 000 /boot/volume.key; chmod -R g-rwx,o-rwx /boot"
-		echo "${AConfFde[vg]}	UUID=$xuuidfde	/boot/volume.key	luks" >>"$dir_install/etc/crypttab"
-		echo 'install_items+=" /boot/volume.key /etc/crypttab "' >>"$dir_install/etc/dracut.conf.d/10-crypt.conf"
+		# Mesmo motivo do Limine: garantir que a initramfs já tenha suporte a
+		# crypt/lvm agora, sem depender de um hook posterior (xbps-reconfigure)
+		# rodar de fato. O GRUB lê /boot ao vivo, então isso é suficiente aqui
+		# (diferente do Limine, que precisa da cópia feita por update-limine).
+		sh_chroot_job "Regenerando initramfs com suporte a LUKS/LVM" "
+		  dracut --force --regenerate-all
+    "
 	fi
 
 	sh_cmd_job "${cmsg_Ajustando} /etc/grub.d/" "
@@ -6149,74 +6525,127 @@ EOF
   "
 
 	if $LBIOS; then
-		sh_chroot_job "${cmsg_Instalando} GRUB $(gettext 'para a plataforma') i386-pc" "
-		   grub-install ${AConfDisk[_BOOTLOADER]} --target=i386-pc --force
-	   "
+		# Checagem defensiva: numa instalação 100% local (sem rede), os
+		# módulos do GRUB só existem se já vieram no squashfs do live. Se
+		# faltar, o grub-install falha com um erro críptico ("modinfo.sh
+		# doesn't exist") — melhor avisar com clareza o motivo real.
+		if [[ -d "$dir_install/usr/lib/grub/i386-pc" || -d "$dir_install/usr/lib64/grub/i386-pc" ]]; then
+			sh_chroot_job "${cmsg_Instalando} GRUB $(gettext 'para a plataforma') i386-pc" "
+        grub-install ${AConfDisk[_BOOTLOADER]} --target=i386-pc --force
+		  "
+		else
+			die "$(gettext 'Módulos do GRUB (i386-pc) não encontrados no sistema.') $(gettext 'O pacote correspondente não veio no sistema live usado nesta instalação 100% local, e a atualização pela internet não foi liberada.') $(gettext 'Refaça a instalação permitindo atualizar pela internet, ou use uma ISO que já inclua esse pacote.')"
+		fi
 	fi
 
 	if $LEFI; then
 		# --removable   = garante boot universal via Fallback
 		# --no-nvram    = não mexe na BIOS
-		sh_chroot_job "${cmsg_Instalando} GRUB $(gettext 'para a plataforma') x86_64-efi" "
-		   grub-install ${AConfDisk[_BOOTLOADER]} --target=$TARGET_EFI --efi-directory=/boot/efi --boot-directory=/boot --bootloader-id=$cnickefi --removable --no-nvram
-	   "
-		#		sh_mkefiroaming
+		if [[ -d "$dir_install/usr/lib/grub/$TARGET_EFI" || -d "$dir_install/usr/lib64/grub/$TARGET_EFI" ]]; then
+			sh_chroot_job "${cmsg_Instalando} GRUB $(gettext 'para a plataforma') x86_64-efi" "
+			   grub-install ${AConfDisk[_BOOTLOADER]} --target=$TARGET_EFI --efi-directory=/boot/efi --boot-directory=/boot --bootloader-id=$cnickefi --removable --no-nvram
+		   "
+			#		sh_mkefiroaming
+		else
+			die "$(gettext 'Módulos do GRUB') ($TARGET_EFI) $(gettext 'não encontrados no sistema.') $(gettext 'O pacote grub-x86_64-efi não veio no sistema live usado nesta instalação 100% local, e a atualização pela internet não foi liberada. Sem ele, o boot EFI não pode ser configurado.') $(gettext 'Refaça a instalação permitindo atualizar pela internet, ou use uma ISO que já inclua esse pacote.')"
+		fi
 	fi
 
 	sh_change_grub
 
-	if ! $LVM; then
-		sh_chroot_job "${cmsg_Gerando} grub.cfg" "
+	# Antes só rodava "if ! $LVM" — mas LFDE sempre implica LVM=true, então
+	# o grub.cfg nunca era gerado aqui em instalações com LUKS, ficando
+	# dependente só de um hook posterior (xbps-reconfigure) rodar por conta
+	# própria. Gerar sempre aqui é seguro e idempotente.
+	sh_chroot_job "${cmsg_Gerando} grub.cfg" "
 		   grub-mkconfig -o /boot/grub/grub.cfg
 	   "
-	fi
-}
-
-sh_is_running_hypervisor() {
-  grep -qw hypervisor $dir_install/proc/cpuinfo
 }
 
 sh_limineInstall() {
-  sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
-    mkdir -p /boot/efi/EFI/BOOT
-    mkdir -p /boot/efi/EFI/limine
-    mkdir -p /boot/efi/limine
-    cp -a /usr/share/limine/BOOTX64.EFI /boot/efi/EFI/BOOT/
-    cp -a /usr/share/limine/BOOTX64.EFI /boot/efi/EFI/limine/
-    cp -a /usr/share/limine/limine-bios.sys /boot/efi/limine/
-    rm -rf /boot/EFI
-  "
+	if $LFDE; then
+		sh_confLuksBoot false
+		# update-limine.sh lê /etc/default/limine (LIMINE_CMDLINE_LINUX_DEFAULT) e
+		# embute isso no cmdline de cada entrada gerada, junto do root=UUID que
+		# ele mesmo descobre via findmnt. Sem isso, a initramfs nunca saberia
+		# qual container destrancar. Sobrevive a updates futuros de kernel,
+		# já que update-limine relê esse arquivo toda vez que roda.
+		sh_chroot_job "Alterando /etc/default/limine" "sed -i 's/^LIMINE_CMDLINE_LINUX_DEFAULT=/#&/' /etc/default/limine 2>/dev/null || true"
+		echo "LIMINE_CMDLINE_LINUX_DEFAULT=\"rw loglevel=4 rd.luks.allow-discards rd.lvm.vg=${AConfFde[vg]} rd.luks.uuid=${AConfFde[uuid]}\"" >>"$dir_install/etc/default/limine"
 
-  if $LBIOS; then
+		# CRÍTICO: update-limine só COPIA a initramfs que já existe em /boot para
+		# o ESP — ele não gera nada. A initramfs original foi criada na instalação
+		# do kernel, ANTES de /etc/crypttab existir, então não tem os módulos de
+		# crypt/lvm embutidos. Sem regenerar agora, o update-limine copiaria essa
+		# initramfs "cega" pro LUKS, e o sistema abriria sem pedir senha nenhuma
+		# (na real, ele simplesmente não teria como montar o root criptografado).
+		sh_chroot_job "Regenerando initramfs com suporte a LUKS/LVM" "dracut --force --regenerate-all"
+	fi
+
+	if [[ -f "$dir_install/usr/share/limine/BOOTX64.EFI" && -f "$dir_install/usr/share/limine/limine-bios.sys" ]]; then
+		sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
+      mkdir -p /boot/efi/EFI/BOOT
+      mkdir -p /boot/efi/EFI/limine
+      mkdir -p /boot/efi/limine
+      cp -a /usr/share/limine/BOOTX64.EFI /boot/efi/EFI/BOOT/
+      cp -a /usr/share/limine/BOOTX64.EFI /boot/efi/EFI/limine/
+      cp -a /usr/share/limine/limine-bios.sys /boot/efi/limine/
+      rm -rf /boot/EFI
+    "
+	else
+		die "$(gettext 'Arquivos do Limine não encontrados no sistema.') $(gettext 'O pacote limine não veio no sistema live usado nesta instalação 100% local, e a atualização pela internet não foi liberada.') $(gettext 'Refaça a instalação permitindo atualizar pela internet, ou use uma ISO que já inclua esse pacote.')"
+	fi
+
+	if $LBIOS; then
 		sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') i386-pc" "
       limine bios-install ${AConfDisk[_BOOTLOADER]} 1
 	   "
 	fi
 
 	if $LEFI; then
-    if ! sh_is_running_hypervisor; then
-  		sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
+		# Testes repetidos acumulam entradas "Limine" antigas no NVRAM, apontando
+		# pra GUIDs de disco que não existem mais (cada reparticionamento gera um
+		# GUID novo). O firmware pode acabar bootando uma dessas entradas velhas
+		# em vez da instalação atual — sintoma: boot não pede senha do LUKS,
+		# porque na real é outro sistema (mais antigo) sendo bootado por engano.
+		# Isso vale tanto rodando direto quanto dentro de QEMU/OVMF, já que o
+		# efivarfs do sistema live reflete no mesmo arquivo de NVRAM persistente.
+		sh_chroot_job "Limpando entradas Limine antigas do NVRAM" "
+      for bootnum in \$(efibootmgr 2>/dev/null | awk -F'Boot|[* ]' '/Limine/{print \$2}'); do
+        efibootmgr -b \"\$bootnum\" -B >/dev/null 2>&1
+      done
+      true
+    "
+
+		if ! sh_is_running_hypervisor; then
+			sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
         efibootmgr -c \
           -d ${AConfDisk[_BOOTLOADER]} \
           -p 2 \
           -L 'Limine' \
           -l '\EFI\limine\BOOTX64.EFI'
     	"
-    else
-      vm_user="${SUDO_USER:-$(id -un)}"
-      vm_home=$(getent passwd "$vm_user" | cut -d: -f6)
-      vm_vars="$vm_home/.chili-fr/OVMF_VARS.4m.fd"
+		else
+			vm_user="${SUDO_USER:-$(id -un)}"
+			vm_home=$(getent passwd "$vm_user" | cut -d: -f6)
+			vm_vars="$vm_home/.chili-fr/OVMF_VARS.4m.fd"
 
-      virt-fw-vars \
-        --inplace "$vm_vars" \
-        --append-boot-filepath "$dir_install/boot/efi/EFI/limine/BOOTX64.EFI"
-    fi
+			virt-fw-vars \
+				--inplace "$vm_vars" \
+				--append-boot-filepath "$dir_install/boot/efi/EFI/limine/BOOTX64.EFI"
+		fi
+
+		sh_change_limine
 
 		sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
       update-limine || true
     "
 	fi
 
+}
+
+sh_is_running_hypervisor() {
+	grep -qw hypervisor $dir_install/proc/cpuinfo
 }
 
 confmulti() {
@@ -6384,64 +6813,47 @@ sh_install_pkgs_in_chroot() {
 		"$err_not_fatal"
 }
 
+# Nome da sessão gravado no autologin do DM (sddm/gdm/lxdm/lightdm).
+# Mapa chave→sessão: o .desktop nem sempre usa o nome do WM (lxde → LXDE).
+# Sessões vêm de /usr/share/{xsessions,wayland-sessions}.
+# tty/server/xorg ficam de fora: não têm sessão, e nesses casos
+# _DISPLAYMANAGER="None" e o valor nem é lido.
 sh_get_session_name() {
 	local SESSION_NAME=xfce
-	local NEWROOT="$dir_install"
+	local x
+	local -A aSession=(
+		[bspwm]=bspwm
+		[cinnamon]=cinnamon
+		[enlightenment]=enlightenment
+		[fluxbox]=fluxbox
+		[gnome]=gnome
+		[hyprland]=hyprland
+		[i3wm]=i3wm
+		[lxde]=LXDE
+		[mango]=mango
+		[mate]=mate
+		[plasma]=plasma
+		[river]=river
+		[sway]=sway
+		[xfce]=xfce
+	)
 
 	for x in "${_WINDOWMANAGER[@]}"; do
-		case "$x" in
-		"i3wm")
-			SESSION_NAME=i3wm
+		# subscrito vazio é "bad array subscript" em array associativo
+		[[ -n "$x" ]] || continue
+
+		# 'local' = marcador de ISO/squashfs; sessão vem do os-release do live
+		if [[ "$x" = "local" ]]; then
+			SESSION_NAME="$(sh_get_edition)"
+			SESSION_NAME="${SESSION_NAME,,}"
 			break
-			;;
-		"fluxbox")
-			SESSION_NAME=fluxbox
+		fi
+		if [[ -n "${aSession[$x]}" ]]; then
+			SESSION_NAME="${aSession[$x]}"
 			break
-			;;
-		"hyprland")
-			SESSION_NAME=hyprland
-			break
-			;;
-		"sway")
-			SESSION_NAME=sway
-			break
-			;;
-		"mango")
-			SESSION_NAME=mango
-			break
-			;;
-		"river")
-			SESSION_NAME=river
-			break
-			;;
-		"xfce")
-			SESSION_NAME=xfce
-			break
-			;;
-		"gnome")
-			SESSION_NAME=gnome
-			break
-			;;
-		"plasma")
-			SESSION_NAME=plasma
-			break
-			;;
-		"cinnamon")
-			SESSION_NAME=cinnamon
-			break
-			;;
-		"mate")
-			SESSION_NAME=mate
-			break
-			;;
-		"enlightenment")
-			SESSION_NAME=enlightenment
-			break
-			;;
-		*) continue ;;
-		esac
+		fi
 	done
-	echo $SESSION_NAME
+	echo "$SESSION_NAME"
 }
 
 sh_update_lxdm_conf() {
@@ -6604,7 +7016,7 @@ autologin-user=$auto_user
 autologin-session=$session
 EOF
 
-	if ! $LSERVER && ! $ONLY_TTY; then
+	if ! $LSERVER && ! $LONLY_TTY; then
 		mkdir -p $cpath_state
 		cat >"${cfile_state}" <<EOF
 [greeter]
@@ -6613,6 +7025,119 @@ last-session=$SESSION_NAME
 EOF
 	fi
 
+}
+
+# Se LVM/FDE está ativo, reparticiona do zero antes de seguir — em vez
+# de tentar limpar cirurgicamente resíduo de VG/LUKS de testes
+# anteriores (não confiável, cache do LVM já mostrou inconsistência
+# várias vezes), recriar a tabela de partição inteira garante disco
+# limpo de verdade. Desmonta antes: se sobrou algo montado de uma
+# sessão anterior (ex: instalação abortada), o kernel recusa atualizar
+# a tabela de partição enquanto a partição antiga estiver em uso.
+sh_prepare_lvm_fde_disk() {
+	local _pvs_output _old_vg _vg_pv _vg_a_remover
+
+	sh_umount_fs
+
+	# Ajusta scan_lvs ANTES de qualquer checagem de VG — sem isso, pvs/vgs
+	# comuns não são confiáveis num disco aninhado (ver sh_fix_scan_lvs).
+	sh_fix_scan_lvs
+
+	# Uma consulta só, usada pras duas coisas abaixo:
+	_pvs_output=$(pvs --noheadings -o pv_name,vg_name 2>/dev/null)
+
+	# 1) Descobre o VG que JÁ está na partição alvo, seja lá qual for o
+	# nome dele — o usuário pode ter digitado um nome NOVO ("xfce") pra
+	# um VG antigo diferente ("voidbrvm") que sobrou de um teste anterior
+	# na mesma partição. Limpar pelo nome NOVO não acha nada (ainda não
+	# existe) e deixa o antigo intocado e ativo — foi exatamente isso que
+	# aconteceu em teste real, travando o pvcreate/vgcreate seguinte
+	# tentando forçar por cima de um VG que ainda estava de pé.
+	_old_vg=$(awk -v part="${AConfFde[partition]}" '$1==part{print $2}' <<<"$_pvs_output")
+
+	# 2) Se já existe um VG com o nome NOVO configurado, mas em OUTRO
+	# disco (não no que está sendo instalado agora), não remove — só um
+	# alerta claro e manda reconfigurar o nome. Prefere avisar aqui a
+	# deixar o vgcreate/pvcreate falhar no meio da instalação.
+	_vg_pv=$(awk -v vg="${AConfFde[vg]}" '$2==vg{print $1}' <<<"$_pvs_output")
+	if [[ -n "$_vg_pv" && "$_vg_pv" != "${AConfDisk[_DEVICE]}"* ]]; then
+		alerta "=== $(gettext 'VOLUME GROUP') ===" \
+			"\n${RED}$(gettext 'Já existe um Volume Group chamado') '${AConfFde[vg]}' $(gettext 'em outro disco') (${_vg_pv}), $(gettext 'fora do disco que está sendo instalado agora.')${RST}" \
+			"\n$(gettext 'Escolha outro nome de Volume Group para continuar.')"
+		if $LFDE; then menu="Fde"; else menu="Lvm"; fi
+		sh_confLvm
+		return 1
+	fi
+
+	# Remove o VG antigo (nome REAL descoberto acima, não o nome novo
+	# digitado) e, por garantia, também tenta pelo nome novo — cobre o
+	# caso normal de reinstalar reaproveitando o mesmo nome de sempre.
+	for _vg_a_remover in "$_old_vg" "${AConfFde[vg]}"; do
+		[[ -z "$_vg_a_remover" ]] && continue
+		vgchange -an "$_vg_a_remover" >/dev/null 2>&1
+		vgremove -ff "$_vg_a_remover" >/dev/null 2>&1
+	done
+	if $LFDE; then
+		# cryptsetup luksOpen usa o nome do VG como nome do mapper LUKS
+		# (ver sh_make_fsFde) — mesmo nome, camada de baixo.
+		cryptsetup luksClose "${AConfFde[vg]}" >/dev/null 2>&1
+	else
+		pvremove -ff "${AConfFde[partition]}" >/dev/null 2>&1
+	fi
+
+	# Só reparticiona se ESSE disco específico ainda não tiver sido
+	# particionado nessa sessão (sh_mkparted interativo, ao configurar
+	# LVM/FDE, já faz isso — chamar de novo aqui é redundante e nem
+	# existia no script original). Continua reparticionando se o disco
+	# mudou depois (LMKPARTED_DEVICE não bate) ou se veio de instalação
+	# silenciosa via .conf sem passar pela tela de partição nessa sessão
+	# (LMKPARTED ainda false).
+	if ! $LMKPARTED || [[ "$LMKPARTED_DEVICE" != "${AConfDisk[_DEVICE]}" ]]; then
+		# Disco aninhado (LV do Proxmox, não um disco bruto) — mais camadas
+		# de device-mapper significam mais chance do kernel ainda não ter
+		# assentado essa remoção antes do sh_mkparted tentar reler a tabela
+		# de partição logo a seguir (mesmo padrão de corrida visto o dia
+		# inteiro nessa mesma pilha aninhada).
+		udevadm settle 2>/dev/null
+		sleep 1
+
+		sh_mkparted true || return 1
+	fi
+
+	return 0
+}
+
+sh_install_DE() {
+	aDE=()
+
+	for x in "${_WINDOWMANAGER[@]}"; do
+		aDE+=("$x")
+		case "$x" in
+		"local") : ;;
+		"tty") sh_base_meta_package ;;
+		"server") sh_server_meta_package ;;
+		"xorg") sh_xorg_minimal_meta_package ;;
+		"awesome") sh_awesome_minimal ;;
+		"dwm") sh_dwm_minimal ;;
+		"lxqt") sh_lxqt_minimal ;;
+		"openbox") sh_openbox_minimal ;;
+		"twm") sh_twm_minimal ;;
+		"bspwm") sh_bspwm_meta_package ;;
+		"lxde") sh_lxde_meta_package ;;
+		"river") sh_river_meta_package ;;
+		"i3wm") sh_i3_meta_package ;;
+		"enlightenment") sh_enlightenment_meta_package ;;
+		"fluxbox") sh_fluxbox_meta_package ;;
+		"hyprland") sh_hyprland_meta_package ;;
+		"gnome") sh_gnome_meta_package ;;
+		"plasma") sh_plasma_meta_package ;;
+		"xfce") sh_xfce_meta_package ;;
+		"cinnamon") sh_cinnamon_meta_package ;;
+		"sway") sh_sway_meta_package ;;
+		"mango") sh_mango_meta_package ;;
+		"mate") sh_mate_meta_package ;;
+		esac
+	done
 }
 
 sh_install() {
@@ -6626,78 +7151,104 @@ sh_install() {
 
 	aPackageDaemons+=(dbus)
 	akernel+=("${AConfKernel[_KERNEL]:-linux}")
-	#
-	afirmware+=(linux-firmware)
-	afirmware+=(linux-firmware-network)
-	afirmware+=(wifi-firmware)
-	afirmware+=(wireless_tools)
-	afirmware+=(wpa_supplicant)
-	afirmware+=(iwd)
-	afirmware+=(iw)
-	#
-	abase+=(xfsprogs)
-	abase+=(jfsutils)
-	abase+=(bash-completion)
-	abase+=(voidbr-base-config)
-	abase+=(voidbr-vinstall)
-	abase+=(voidbr-utils)
-	abase+=(chili-utils)
-	abase+=(fzf)
-	abase+=(eza)
-	abase+=(gettext)
-	abase+=(chrony)
-	abase+=(pigz)
-	abase+=(zstd)
-	abase+=(xz)
-	abase+=(sed)
-	abase+=(grep)
-	abase+=(grc)
-	abase+=(socklog)
-	abase+=(socklog-void)
-	abase+=(fastfetch)
-	#
 
-	agrub+=(dracut voidbr-plymouth-theme)
-  if [[ "${AConfBootLoader[_LOADER]}" == 'grub' ]]; then
-  	agrub+=(grub-i386-efi)
-  	agrub+=(grub-utils)
-  	agrub+=(grub-terminus)
-  	agrub+=(grub-btrfs-runit)
-  	agrub+=(voidbr-grub-theme)
-  else
-  	agrub+=(limine)
-  	agrub+=(voidbr-limine-config)
-  fi
-
-	if $LVM; then
-		abase+=(lvm2)
+	if ! $LMETA; then
+		afirmware+=(intel-ucode)
+		afirmware+=(linux-firmware)
+		#		afirmware+=(sof-firmware)
+		#		afirmware+=(alsa-firmware)
+		#		afirmware+=(linux-firmware-network)
+		#		afirmware+=(linux-firmware-intel)
+		#		afirmware+=(linux-firmware-nvidia)
+		#		afirmware+=(linux-firmware-amd)
+		afirmware+=(wifi-firmware)
+		afirmware+=(wireless_tools)
+		afirmware+=(wpa_supplicant)
+		afirmware+=(iwd)
+		afirmware+=(iw)
 	fi
 
-	if $LFDE; then
-		abase+=(cryptsetup)
+	if ! $LMETA; then
+		abase+=(xfsprogs)
+		abase+=(jfsutils)
+		abase+=(bash-completion)
+		abase+=(voidbr-base-config)
+		abase+=(voidbr-vinstall)
+		abase+=(voidbr-utils)
+		abase+=(chili-utils)
+		abase+=(fzf)
+		abase+=(eza)
+		abase+=(gettext)
+		abase+=(chrony)
+		abase+=(pigz)
+		abase+=(zstd)
+		abase+=(xz)
+		abase+=(sed)
+		abase+=(grep)
+		abase+=(grc)
+		abase+=(socklog)
+		abase+=(socklog-void)
+		abase+=(fastfetch)
+	fi
+
+	if ! $LMETA; then
+		#		agrub+=(dracut voidbr-plymouth-theme)
+		agrub+=(voidbr-plymouth-theme)
+		if [[ "${AConfBootLoader[_LOADER]}" == 'grub' ]]; then
+			agrub+=(grub-i386-efi)
+			agrub+=(grub-utils)
+			agrub+=(grub-terminus)
+			agrub+=(grub-btrfs-runit)
+			agrub+=(voidbr-grub-theme)
+		else
+			agrub+=(limine)
+			agrub+=(voidbr-limine-config)
+		fi
+	fi
+
+	if ! $LMETA; then
+		if $LVM; then
+			abase+=(lvm2)
+		fi
+	fi
+
+	if ! $LMETA; then
+		if $LFDE; then
+			abase+=(cryptsetup)
+		fi
 	fi
 
 	ncounter=0
 	sh_checkInstall || return 1
 
-	#	dialog --title $BOOTLOG --begin 1 0 --tailbox "$BOOTLOG" 20 0 &
+	if $LFDE || $LVM; then
+		sh_prepare_lvm_fde_disk || return 1
+	fi
+
 	reset
-	sh_checkNet "$url_mirror" || return 1
+	if [[ "${AConfMirror[_SOURCE]}" = "local" ]]; then
+		# LUPDATELOCAL já foi decidido em sh_chooseSource, logo após escolher
+		# "local" — não pergunta de novo aqui, só respeita a resposta.
+		:
+	else
+		sh_checkNet "$url_mirror" || return 1
+	fi
 	if [[ "${AConfMirror[_SOURCE]}" = "network" ]]; then
 		sh_checkTarball
 	fi
 
 	sh_choose_common_packages
+	sh_configure_display_manager
 
 	start_time=$(date +%s) # Obtém o tempo de início em segundos desde a época Unix
 	start_datetime=$(date)
 
 	if $LEFI; then
 		if sh_getBootEFI; then
-      if [[ "${AConfBootLoader[_LOADER]}" == 'grub' ]]; then
-		  	agrub+=(grub-"$TARGET_EFI")
-      fi
- 			agrub+=(efivar)
+			if [[ "${AConfBootLoader[_LOADER]}" == 'grub' ]]; then
+				agrub+=(grub-"$TARGET_EFI")
+			fi
+			agrub+=(efivar)
 			agrub+=(efibootmgr)
 		else
 			LEFI=false
@@ -6718,111 +7269,90 @@ sh_install() {
 		sh_configure_custom_packages
 
 		if sh_extract_root_fs; then
+			# Go install
 			sh_init_bind
 			sh_cmd_job "${cmsg_Copiando} /etc/resolv.conf" "cp -f /etc/resolv.conf $dir_install/etc/"
 			sh_update_mirror
-			#			sh_checkNet "$url_mirror" || return 1
+			sh_checkNet "$url_mirror" || return 1
 
-			# Go install
-			#			sh_chroot_job "${cmsg_Atualizando} xbps" "
-			#       LC_ALL=C xbps-install --sync --update xbps --yes
-			#     "
-			sh_chroot_job "${cmsg_Atualizando} xbps" "
-			  LC_ALL=C xbps-install -Syuf voidbr-xbps
-		  "
-			sh_copy_keys # ao remover xbps a chave tamém é removida, recolocando!
-			if [[ "${AConfMirror[_SOURCE]}" = "local" && "${LCUSTOM:-}" = "false" ]]; then
-				#sh_chroot_job "${cmsg_AtualizandoRepositorio}" "LC_ALL=C xbps-install -Syu"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando') BootLoader" "${agrub[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Atualizando Pacotes Base')" "${abase[*]}"
-			else
-				#				sh_chroot_job "${cmsg_AtualizandoRepositorio}" "LC_ALL=C xbps-install -Syu"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Kernel')" "${akernel[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando') BootLoader" "${agrub[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Atualizando Pacotes Base')" "${abase[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Wifi Firmware')" "${afirmware[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Daemons')" "${aPackageDaemons[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Editores Texto Gráfico ')" "${aEditorX[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Editores texto')" "${aEditorTxt[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Downloaders')" "${aDownloader[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Utilitários')" "${aUtility[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Archiver tty')" "${aArchiverTty[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Extras')" "${aExtra[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Suplementos')" "${aSuplemento[*]}"
-				sh_install_pkgs_in_chroot "$(gettext 'Instalando Pacotes customizados')" "${aCustomPackages[*]}"
+			# Em modo local, só mexe em rede se o usuário topou (LUPDATELOCAL).
+			# Fora do modo local, mantém o comportamento de sempre (via rede).
+			if [[ "${AConfMirror[_SOURCE]}" != "local" ]] || $LUPDATELOCAL; then
+				sh_chroot_job "${cmsg_Atualizando} xbps" "
+				  LC_ALL=C xbps-install --sync --update --yes --force --force voidbr-xbps
+			  "
 			fi
 
-      if [[ "${AConfBootLoader[_LOADER]}" == 'grub' ]]; then
-  			sh_grubInstall
-	    else
-        sh_limineInstall
-	    fi
+			sh_copy_keys # ao remover xbps a chave tamém é removida, recolocando!
+			sh_install_DE
 
+			if [[ "${AConfMirror[_SOURCE]}" = "local" ]] && ! $LCUSTOM && ! $LUPDATELOCAL; then
+				# source=local, LCUSTOM=false, LUPDATELOCAL=false: 100% offline,
+				# nada a instalar (squashfs já tem tudo).
+				sh_info_msg "$(gettext 'Instalação 100% local: usando bootloader/pacotes base já presentes no sistema live, sem acessar a internet.')"
+			else
+				# Qualquer outro caso: internet disponível (source != local, ou
+				# LUPDATELOCAL=true) — atualiza bootloader/base.
+				sh_install_pkgs_in_chroot "$(gettext 'Instalando') BootLoader" "${agrub[*]}"
+				sh_install_pkgs_in_chroot "$(gettext 'Instalando Pacotes Base')" "${abase[*]}"
+
+				if [[ "${AConfMirror[_SOURCE]}" = "local" ]] && ! $LCUSTOM; then
+					# source=local, LCUSTOM=false (LUPDATELOCAL=true implícito, senão
+					# cairia no primeiro if): só bootloader/base acima, sem o resto.
+					:
+				else
+					# source!=local, ou LCUSTOM=true: instalação completa.
+					sh_install_pkgs_in_chroot "$(gettext 'Instalando Kernel')" "${akernel[*]}"
+					sh_install_pkgs_in_chroot "$(gettext 'Instalando Firmware')" "${afirmware[*]}"
+					sh_install_pkgs_in_chroot "$(gettext 'Instalando Daemons')" "${aPackageDaemons[*]}"
+					sh_install_pkgs_in_chroot "$(gettext 'Instalando Utilitários')" "${aUtility[*]}"
+					sh_install_pkgs_in_chroot "$(gettext 'Instalando Extras')" "${aExtra[*]}"
+					sh_install_pkgs_in_chroot "$(gettext 'Instalando Pacotes customizados')" "${aCustomPackages[*]}"
+				fi
+			fi
+
+			if [[ "${AConfBootLoader[_LOADER]}" == 'grub' ]]; then
+				sh_grubInstall
+			else
+				sh_limineInstall
+			fi
+
+			sh_set_edition_os_release "$(sh_get_edition_label)"
 			sh_make_fstab
 
 			#debug $LONLY_TTY
 			if ! $LONLY_TTY; then
 				sh_update_Xkeymap
-				if [[ "${AConfMirror[_SOURCE]}" = "local" && "${LCUSTOM:-}" = "false" ]]; then
-					:
-				elif $LSWAY; then
+				if [[ "${AConfMirror[_SOURCE]}" = "local" ]]; then
+					# source=local: DE já veio pronto no squashfs, independente de LCUSTOM
+					# nunca cai no sh_X11_minimal (evita assumir XFCE numa ISO que pode ser de outro DE).
+					#
+					# O DM é a única peça que o usuário ainda pode trocar aqui:
+					# sh_choose_dm (6349) abre o menu quando LUPDATELOCAL. Sem
+					# isto ele escolhe sddm e nada é baixado — boota no DM da ISO.
+					if $LUPDATELOCAL && ((${#aDisplaymanager[@]})); then
+						sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM')" "${aDisplaymanager[*]}"
+						((${#aDisplaymanagerConfig[@]})) &&
+							sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM Config')" "${aDisplaymanagerConfig[*]}"
+					fi
+				elif $LMETA; then
+					# Meta-pacote (voidbr-*) já traz o DE inteiro — só falta o DM,
+					# que é escolha independente do usuário.
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM')" "${aDisplaymanager[*]}"
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM Config')" "${aDisplaymanagerConfig[*]}"
-					:
-				elif $LMANGO; then
-					sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM')" "${aDisplaymanager[*]}"
-					sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM Config')" "${aDisplaymanagerConfig[*]}"
-					:
-				elif $LHYPRLAND; then
-					sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM')" "${aDisplaymanager[*]}"
-					sh_install_pkgs_in_chroot "$(gettext 'Instalando Meta Pacote DM Config')" "${aDisplaymanagerConfig[*]}"
+				elif $LXORG; then
 					:
 				else
+					# WM sem meta-pacote próprio ainda (awesome, bspwm, dwm, openbox) — precisa do X11 base.
 					sh_X11_minimal
 				fi
 			fi
 
-			aDE=()
-			for x in "${_WINDOWMANAGER[@]}"; do
-				aDE+=("$x")
-				case "$x" in
-				"tty") : ;;
-				"local")
-					if $LCUSTOM; then
-						sh_xfce_minimal
-					fi
-					;;
-				"server") sh_server_minimal ;;
-				"xorg") sh_xorg_minimal ;;
-				"awesome") sh_awesome_minimal ;;
-				"bspwm") sh_bspwm_minimal ;;
-				"dwm") sh_dwm_minimal ;;
-				"enlightenment") sh_enlightenment_minimal ;;
-				"fluxbox") sh_fluxbox_meta_package ;;
-				"hyprland") sh_hyprland_meta_package ;;
-				"openbox") sh_openbox_minimal ;;
-				"gnome") sh_gnome_minimal ;;
-				"plasma") sh_plasma_minimal ;;
-				"xfce") sh_xfce_minimal ;;
-				"cinnamon") sh_cinnamon_minimal ;;
-				"i3wm") sh_i3_minimal ;;
-				"sway") sh_sway_meta_package ;;
-				"mango") sh_mango_meta_package ;;
-				"river") sh_river_minimal ;;
-				"twm") sh_twm_minimal ;;
-				"mate") sh_mate_minimal ;;
-				"lxde") sh_lxde_minimal ;;
-				"lxqt") sh_lxqt_minimal ;;
-				esac
-			done
+			#			sh_install_DE
 
 			sh_make_user
 			sh_update_hostname
 			sh_update_rc_local
-
-			if ! $SERVER; then
-				sh_update_sshd
-			fi
 
 			sh_update_rc_conf
 			sh_update_locale
@@ -6833,8 +7363,6 @@ sh_install() {
 			elif [[ "${AConfAudio[_AUDIOSERVER]}" == 'Pulseaudio' ]]; then
 				sh_activating_pulseaudio
 			fi
-
-			#			debug "$_DISPLAYMANAGER" "\n${aDisplaymanager[*]}"
 
 			case "$_DISPLAYMANAGER" in
 			lxdm) sh_update_lxdm_conf ;;
@@ -6850,16 +7378,19 @@ sh_install() {
 				if $LDHCP; then
 					sh_build_and_apply_dhcpcd_config
 				fi
+			else
+				sh_update_sshd
 			fi
 
 			sh_chroot_job "$(gettext 'Validando configuração para FINALIZAR')" "
-                xbps-reconfigure --force glibc-locales
-                xbps-reconfigure --force --all
-            "
+        #xbps-reconfigure --force glibc-locales
+        xbps-reconfigure --force --all
+      "
+
 			sh_chroot_job "${cmsg_RemovendoPacotesAntigosObseletos}" "
-			   rm -fv /var/cache/xbps/*.xbps
-               rm -fv /var/cache/xbps/*.sig*
-            "
+        rm -fv /var/cache/xbps/*.xbps
+        rm -fv /var/cache/xbps/*.sig*
+      "
 
 			if $LHYPRLAND; then
 				sh_configure_hyprland_audio
@@ -6886,6 +7417,28 @@ sh_install() {
 		exit 0
 	} # > out & sh_monitor
 	#	killall dialog
+}
+
+start_time=$(date +%s)
+
+sh_timer() {
+	while true; do
+		local duration=$(($(date +%s) - start_time))
+		local hours=$((duration / 3600))
+		local minutes=$(((duration % 3600) / 60))
+		local seconds=$((duration % 60))
+		local time
+		local cols
+		local pos
+
+		time=$(printf '%02d:%02d:%02d' "$hours" "$minutes" "$seconds")
+		cols=$(tput cols)
+		pos=$((cols - ${#time}))
+
+		printf '\033[1;%sH%s' "$pos" "$time"
+
+		sleep 1
+	done
 }
 
 sh_time_elapsed() {
@@ -7161,6 +7714,25 @@ sh_choose_Partition() {
 			return 1
 		fi
 
+		# Checagem ao vivo (não usa cache): cobre tanto o caso de o usuário
+		# nunca ter passado por aqui quanto o caso de vir de uma sessão restaurada
+		# (/tmp/void-install.conf) sem ter reescolhido o disco. Se o particionamento
+		# for concluído de fato, sh_mkparted já limpa a assinatura antiga (wipefs)
+		# e essa condição deixa de ser verdadeira na próxima entrada.
+		if sh_has_luks_remnant "${AConfDisk[_DEVICE]}"; then
+			LMKPARTED=false
+			LFSREVISED=false
+			if conf "${RED}${REVERSE}$(gettext '=== CONTAINER LUKS ENCONTRADO ===')" \
+				"\n$(gettext 'Foi encontrada uma partição LUKS de uma instalação anterior neste disco.')" \
+				"\n$(gettext 'Ela não será reaproveitada e não pode ser usada como está.')" \
+				"\n\n${BOLD}${YELLOW}$(gettext 'Deseja ir para o particionamento agora?')${RST}"; then
+				sh_checkdisk "${AConfDisk[_DEVICE]}"
+				sh_menuUtilDisk
+			fi
+			DEFITEM="${cmsg_Disco}"
+			return 1
+		fi
+
 		if [[ "${#ARRAY_PART_DEVICES[@]}" -eq 0 ]]; then
 			info "${cmsg_TitleFileSystem}" "\n\n${RED}$(gettext 'Disco de armazenamento não foi particionado')${RST}"
 			return 1
@@ -7313,44 +7885,16 @@ $(gettext "Criar um novo sistema de arquivos em") $part?" 8 75
 	done
 }
 
-sh_chooseperfumery() {
-	local -A Aperfumery
-	local -A Aflag
-	local -a array=()
-	local exit_status
-	local x
-
-	Aperfumery[bash]=$(gettext "Ativar o bash para o usuario root")
-	Aperfumery[bashrc]=$(gettext "Instalar bashrc.sh personalizado")
-	Aperfumery[console]=$(gettext "Usar um terminal gráfico para o Carregador de Inicialização (GRUB)")
-	Aperfumery[sshd]=$(gettext "Configurar servidor ssh")
-	Aperfumery[sudo]=$(gettext "Enable sudo for login user")
-
-	for x in "${!Aperfumery[@]}"; do
-		Aflag[$x]='off'
-		array+=("$x" "${Aperfumery[$x]}" "${Aflag[$x]}")
-	done
-
-	perf=$(${DIALOG} --title "$(gettext "=== PERFUMARIA ===")" \
-		--default-item "$_WINDOWMANAGER" \
-		--colors \
-		--cancel-label "${cmsg_ButtonBack}" \
-		--ok-label "${cmsg_Aceitar}" \
-		--checklist "${cmsg_MENU}" \
-		12 70 0 "${array[@]}" 2>&1 >/dev/tty)
-
-	exit_status=$?
-	case $exit_status in
-	"$D_ESC" | "$D_CANCEL")
-		return
-		;;
-	esac
-	_PERFUMERY=($(strtoarray "$perf"))
-	LPERFUMERY=1
-}
-
 sh_toBytes() {
 	local ent mut num fra sai
+
+	# "%" não é unidade de byte — não dá pra converter (depende do disco).
+	# Sem essa proteção, a conta de expoente negativo abaixo quebra e devolve
+	# vazio (silenciosamente), mascarando validações que dependem do valor.
+	[[ "$1" == *%* ]] && {
+		echo 0
+		return 0
+	}
 
 	ent=${1^^}
 	[[ ${ent} = "" ]] && ent=0B
@@ -7365,6 +7909,20 @@ sh_toBytes() {
 	((mut = ${#ent} - 1, sai = num * 1024 ** mut))
 	((ent = ${#sai} - ${#fra}))
 	echo ${sai:0:$ent}
+}
+
+# sh_toBytes sozinha não sabe converter percentual (não conhece o total do
+# disco) — sempre devolve 0 pra qualquer valor com "%". Esse helper resolve
+# os dois casos: percentual do total (usa $2 como referência) ou tamanho
+# absoluto (delega pra sh_toBytes normalmente).
+sh_toBytesPercent() {
+	local v="$1" total="$2" pct
+	if [[ "$v" == *% ]]; then
+		pct="${v%\%}"
+		echo $(((total * pct) / 100))
+	else
+		sh_toBytes "$v"
+	fi
 }
 
 sh_ternario() {
@@ -7451,41 +8009,45 @@ sh_main_menu() {
 			DEFITEM="${cmsg_Mirror}"
 		fi
 
-		ccabec="${baseccabec}${BLACK}${url_mirror} "
+		if $LHAS_INTERNET; then
+			ccabec="${baseccabec}${BLACK}${url_mirror} "
+		else
+			ccabec="${baseccabec}${RED}OFFLINE ${RST}"
+		fi
 		$LMIRROR && MENU_MIRROR="${cOK}[${AConfMirror[_MIRROR]}]${RST} ● " ||
-		            MENU_MIRROR="${cNOK}"
+			MENU_MIRROR="${cNOK}"
 		$LSOURCE && MENU_SOURCE="${cOK}[${AConfMirror[_SOURCE]}]${RST} ● " ||
-		            MENU_SOURCE="${cNOK}"
+			MENU_SOURCE="${cNOK}"
 		$LDISK && MENU_DEVICE="${cOK}[${AConfDisk[_DEVICE]}]${RST} ● " ||
-		          MENU_DEVICE="${cNOK}"
+			MENU_DEVICE="${cNOK}"
 		$LLOADER && MENU_BOOTLOADER="${cOK}[${AConfBootLoader[_LOADER]}]${RST}" ||
-		            MENU_BOOTLOADER="${cNOK}"
+			MENU_BOOTLOADER="${cNOK}"
 		$LGRUB && MENU_BOOTLOADER+="/${cOK}[${AConfDisk[_BOOTLOADER]}]${RST} ● " ||
-		          MENU_BOOTLOADER+="/${cERRO}[${cmsg_Nao_definido}]${RST} ● "
+			MENU_BOOTLOADER+="/${cERRO}[${cmsg_Nao_definido}]${RST} ● "
 		$LMKPARTED && { $LFSREVISED && MENU_FS="${cOK}[OK => revisado!]${RST} ● " ||
-		                               MENU_FS="${cOK}[${cERRO}NOK${cWARN} => revise!]${RST} ● "; } ||
-		                               MENU_FS="${cNOK}"
+			MENU_FS="${cOK}[${cERRO}NOK${cWARN} => revise!]${RST} ● "; } ||
+			MENU_FS="${cNOK}"
 		$LKEYMAP && MENU_KEYMAP="${cOK}[${AConfLocale[_KEYMAP]}]${RST} ● " ||
-		            MENU_KEYMAP="${cNOK}"
+			MENU_KEYMAP="${cNOK}"
 		$LTIMEZONE && MENU_TIMEZONE="${cOK}[${AConfLocale[_TIMEZONE]}]${RST} ● " ||
-		              MENU_TIMEZONE="${cNOK}"
+			MENU_TIMEZONE="${cNOK}"
 		$LLOCALE && MENU_LOCALE="${cOK}[${AConfLocale[_LOCALE]} ${AConfLocale[_REGION]}]${RST} ● " ||
-		            MENU_LOCALE="${cNOK}"
+			MENU_LOCALE="${cNOK}"
 		$LKERNEL && MENU_KERNEL="${cOK}[${AConfKernel[_KERNEL]}]${RST} ● " ||
-		            MENU_KERNEL="${cNOK}"
+			MENU_KERNEL="${cNOK}"
 
 		$LAUDIO && MENU_AUDIO="${cOK}[${AConfAudio[_AUDIOSERVER]}]${RST} ● " ||
 			{ $LONLY_TTY && MENU_AUDIO="${cOK}[${AConfAudio[_AUDIOSERVER]}]${RST} ● " ||
-			                MENU_AUDIO="${cMOK}"; }
+				MENU_AUDIO="${cMOK}"; }
 		$LCUSTOM && MENU_CUSTOM="CUSTOM" ||
-		            MENU_CUSTOM=""
+			MENU_CUSTOM=""
 		$LWM && MENU_WM="${cOK}[${_WINDOWMANAGER[*]} ${MENU_CUSTOM}]${RST} ● " ||
-		        MENU_WM="${cNOK}"
+			MENU_WM="${cNOK}"
 		$LDM && MENU_DM="${cOK}[${_DISPLAYMANAGER}]${RST} ● " ||
-		        MENU_DM="${cNOK}"
+			MENU_DM="${cNOK}"
 		#			{ $LONLY_TTY && MENU_DM="${cWARN}[${_DISPLAYMANAGER}]${RST} ● " || MENU_DM="${cERRO}[${cmsg_Nao_definido}]${RST} ● "; }
 		$LEXTRA && MENU_EXTRA="${cOK}[OK]${RST} ● " ||
-		           MENU_EXTRA="${cNOK}"
+			MENU_EXTRA="${cNOK}"
 
 		#			"Sistema" "${MENU_KEYMAP}Configurações regionais" \
 		#			"${cmsg_Mirror}" "${MENU_MIRROR}${cmsg_descMirror}" \
@@ -7556,7 +8118,12 @@ sh_main_menu() {
 		"Fde") sh_confLvm && [ -n "$LFDE" ] && DEFITEM="${cmsg_Instalar}" ;;
 		"Lvm") sh_confLvm && [ -n "$LVM" ] && DEFITEM="${cmsg_Instalar}" ;;
 		"Vg") sh_chooseVg ;;
-		"Wifi") sh_run_binary 'voidbr-wifi-setup' && DEFITEM="${cmsg_Instalar}" ;;
+		"Wifi")
+			sh_run_binary 'voidbr-wifi-setup' && {
+				sh_check_internet && LHAS_INTERNET=true || LHAS_INTERNET=false
+				DEFITEM="${cmsg_Instalar}"
+			}
+			;;
 		"Prompt") bash "$@" && [ -n "$LWIFI" ] && DEFITEM="Prompt" ;;
 		"${cmsg_Sair}") die "${cmsg_InstalacaoAbortada}..." ;;
 		*)
@@ -7637,6 +8204,13 @@ sh_getfullusernameloggeduser() {
 	echo "${passwd_fields[4]}"
 }
 
+# GECOS do usuário informado. Amarra cfullname ao mesmo /etc/passwd de onde
+# veio o cuser — byGetent usava SUDO_USER:-$USER, que dentro da ISO é root
+# (o instalador roda como root, sem sudo) e devolvia o GECOS do root.
+sh_getfullnamefromuser() {
+	getent passwd "$1" | cut -d ':' -f 5 | cut -d ',' -f 1
+}
+
 function sh_getfullusernameloggeduserbyGetent() {
 	local logged_user="${SUDO_USER:-$USER}" # Prioriza SUDO_USER, mas usa USER como fallback
 	getent passwd "$logged_user" | cut -d ':' -f 5 | cut -d ',' -f 1
@@ -7675,6 +8249,8 @@ sh_confLvm() {
 	local ctitlemenu
 	local VGs
 	local PVs
+	local _vg_pv
+	local _old_vg
 
 	if [[ "$menu" = "Fde" ]]; then
 		ctitlemenu='FDE CONFIG'
@@ -7695,10 +8271,6 @@ sh_confLvm() {
 	fi
 
 	sh_disk_part_info
-	mensagem "=== VGs ===" "\n\n${BOLD}${WHITE}$(gettext "Aguarde... coletando informações sobre VGs")"
-	VGs="$(vgs --noheadings)"
-	mensagem "=== PVs ===" "\n\n${BOLD}${WHITE}$(gettext "Aguarde... coletando informações sobre PVs")"
-	PVs="$(pvs --noheadings)"
 	disk="${AConfDisk[_BOOTLOADER]}|\
 $(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" "$DSK_TRAN")|\
 $(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" "$DSK_SIZE")|\
@@ -7731,34 +8303,120 @@ $(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" "$DSK_SERIAL"
 		return 1
 	fi
 
+	# Sugere um nome de VG baseado no disco (ex: /dev/mapper/pve-lvm ->
+	# voidbrlvm, /dev/sda -> voidbrsda) sempre que o campo estiver vazio —
+	# vazio é o sinal de "nunca foi definido" (nem pelo usuário, nem vindo
+	# do .conf). Se já tiver algo ali (customizado ou carregado), preserva.
+	if [[ -z "${AConfFde[vg]}" ]]; then
+		local _vg_suffix="${AConfDisk[_DEVICE]##*/}"
+		_vg_suffix="${_vg_suffix##*-}"
+		AConfFde[vg]="voidbr${_vg_suffix}"
+	fi
+
+	# Mostra a tela de instrução só na primeira vez — se já teve um
+	# preenchimento bem-sucedido antes (LFDE ou LVM já true), o usuário já
+	# sabe como funciona; ao reabrir só pra editar, pula direto pro
+	# formulário, sem repetir a explicação.
+	if ! $LFDE && ! $LVM; then
+		${DIALOG} \
+			--colors \
+			--clear \
+			--no-collapse \
+			--no-cr-wrap \
+			--title "=== $ctitlemenu ===" \
+			--backtitle "$ccabec" \
+			--ok-label "${cmsg_ok}" \
+			--msgbox "\n${BOLD}$(gettext 'Como preencher os percentuais dos volumes lógicos:')${RST}\n$(gettext 'Cada percentual é relativo ao TOTAL do espaço reservado — não precisa se preocupar com "o que sobra", o script calcula isso por você.')\n\n${YELLOW}$(gettext 'A SOMA de tudo que você preencher precisa fechar, no máximo, 100%.')${RST}\n$(gettext 'Digite só o número, sem o "%" (ex: root=25, boot=2, var=5, home=68 — soma=100 cria os quatro volumes nesses tamanhos exatos).')\n\n${YELLOW}$(gettext 'Padrão: root=100, boot/swap/var/home em branco')${RST} — $(gettext 'tudo fica dentro de uma única partição; boot, swap, var e home continuam existindo como pastas normais dentro de /, sem volume lógico separado.')\n\n$(gettext 'Deixe em branco (ou \"0\") o campo que não quiser como volume separado.')\n\n$(gettext 'Também aceita tamanho absoluto em vez de percentual (ex: 10G, 500M) — nesse caso é descontado do total, e os demais percentuais se referem ao que sobrou.')" \
+			0 0
+	fi
+
 	while true; do
 		exec 3>&1
+
+		# Monta os campos dinamicamente: Passphrase/Verify Passphrase só fazem
+		# sentido no modo Fde (LUKS). No modo Lvm puro, sem criptografia, não
+		# há motivo pra pedir senha nenhuma — os campos nem aparecem.
+		local -a formargs=()
+		local nextrow=1
+		local idx=0
+		local idx_vg idx_pass=-1 idx_verify=-1 idx_lvroot idx_lvboot idx_lvswap idx_lvvar idx_lvhome
+
+		formargs+=("Disk: " "$nextrow" 1 "$disk" "$nextrow" 42 40 0 2)
+		((idx++, nextrow++))
+		formargs+=("Partition: " "$nextrow" 1 "$_part" "$nextrow" 42 40 0 2)
+		((idx++, nextrow++))
+		formargs+=("Size: " "$nextrow" 1 "$size" "$nextrow" 42 40 0 2)
+		((idx++, nextrow++))
+		formargs+=("Old FS: " "$nextrow" 1 "$oldfstype" "$nextrow" 42 40 0 2)
+		((idx++, nextrow++))
+		formargs+=("New FS: " "$nextrow" 1 "$fstype" "$nextrow" 42 40 0 2)
+		((idx++, nextrow++))
+		formargs+=("Flag: " "$nextrow" 1 "$flag" "$nextrow" 42 40 0 2)
+		((idx++, nextrow++))
+		formargs+=("Volume Group: " "$nextrow" 1 "${AConfFde[vg]}" "$nextrow" 42 25 0 0)
+		idx_vg=$idx
+		((idx++, nextrow++))
+
+		if [[ "$menu" = "Fde" ]]; then
+			formargs+=("Passphrase: " "$nextrow" 1 "${AConfFde[passphrase]}" "$nextrow" 42 20 0 1)
+			idx_pass=$idx
+			((idx++, nextrow++))
+			formargs+=("Verify Passphrase: " "$nextrow" 1 "${AConfFde[verifypassphrase]}" "$nextrow" 42 20 0 1)
+			idx_verify=$idx
+			((idx++, nextrow++))
+		fi
+
+		formargs+=("Logical volume (/): " "$nextrow" 1 "${AConfFde[lvroot]}" "$nextrow" 42 15 0 0)
+		idx_lvroot=$idx
+		((idx++, nextrow++))
+		formargs+=("Logical volume (/boot) (empty to none): " "$nextrow" 1 "${AConfFde[lvboot]}" "$nextrow" 42 15 0 0)
+		idx_lvboot=$idx
+		((idx++, nextrow++))
+		formargs+=("Logical volume (/swap) (empty to none): " "$nextrow" 1 "${AConfFde[lvswap]}" "$nextrow" 42 15 0 0)
+		idx_lvswap=$idx
+		((idx++, nextrow++))
+		formargs+=("Logical volume (/var)  (empty to none): " "$nextrow" 1 "${AConfFde[lvvar]}" "$nextrow" 42 15 0 0)
+		idx_lvvar=$idx
+		((idx++, nextrow++))
+		formargs+=("Logical volume (/home) (empty to none): " "$nextrow" 1 "${AConfFde[lvhome]}" "$nextrow" 42 15 0 0)
+		idx_lvhome=$idx
+		((idx++, nextrow++))
+
 		FdeText=$(${DIALOG} \
 			--title "=== $ctitlemenu ===" \
 			--colors \
 			--ok-label "${cmsg_Aceitar}" \
 			--cancel-label "${cmsg_ButtonBack}" \
+			--extra-button \
+			--extra-label "$(gettext 'Reset')" \
 			--backtitle "$ccabec" \
 			--insecure "$@" \
 			--mixedform "${cmsg_MENU}\n\n$(gettext "O tamanho das partições é uma questão de preferência pessoal.")" \
 			0 0 0 \
-			"Disk: " 1 1 "$disk" 1 42 40 0 2 \
-			"Partition: " 2 1 "$_part" 2 42 40 0 2 \
-			"Size: " 3 1 "$size" 3 42 40 0 2 \
-			"Old FS: " 4 1 "$oldfstype" 4 42 40 0 2 \
-			"New FS: " 5 1 "$fstype" 5 42 40 0 2 \
-			"Flag: " 6 1 "$flag" 6 42 40 0 2 \
-			"Volume Group: " 7 1 "${AConfFde[vg]}" 7 42 25 0 0 \
-			"Passphrase: " 8 1 "${AConfFde[passphrase]}" 8 42 20 0 1 \
-			"Verify Passphrase: " 9 1 "${AConfFde[verifypassphrase]}" 9 42 20 0 1 \
-			"Logical volume (/): " 10 1 "${AConfFde[lvroot]}" 10 42 15 0 0 \
-			"Logical volume (/swap) (empty to none): " 11 1 "${AConfFde[lvswap]}" 11 42 15 0 0 \
-			"Logical volume (/var)  (empty to none): " 12 1 "${AConfFde[lvvar]}" 12 42 15 0 0 \
-			"Logical volume (/home) (empty to none): " 13 1 "${AConfFde[lvhome]}" 13 42 15 0 0 \
+			"${formargs[@]}" \
 			2>&1 1>&3)
 
 		exit_status=$?
+		# fd 3 só serve pro dialog acima. Fechando aqui, os nove return 1
+		# espalhados pelas validações abaixo não precisam se lembrar dele.
+		exec 3>&-
+
 		case $exit_status in
+		"$D_EXTRA")
+			# "Reset": volta tudo pro estado inicial, como se nada tivesse
+			# sido configurado ainda — não confirma nem cancela, só limpa.
+			AConfFde[vg]=''
+			AConfFde[passphrase]='voidlinux'
+			AConfFde[verifypassphrase]='voidlinux'
+			AConfFde[lvroot]='100%'
+			AConfFde[lvboot]=''
+			AConfFde[lvswap]=''
+			AConfFde[lvvar]=''
+			AConfFde[lvhome]=''
+			LFDE=false
+			LVM=false
+			return 1
+			;;
 		"$D_ESC" | "$D_CANCEL")
 			LFDE=false
 			LVM=false
@@ -7766,17 +8424,75 @@ $(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" "$DSK_SERIAL"
 			;;
 		"$D_OK")
 			mapfile -t arr <<<"$FdeText"
-			AConfFde[vg]="${arr[6]}"
-			AConfFde[passphrase]="${arr[7]}"
-			AConfFde[verifypassphrase]="${arr[8]}"
-			AConfFde[lvroot]="${arr[9]}"
-			AConfFde[lvswap]="${arr[10]}"
-			AConfFde[lvvar]="${arr[11]}"
-			AConfFde[lvhome]="${arr[12]}"
+			AConfFde[vg]="${arr[$idx_vg]}"
+			if [[ "$idx_pass" -ge 0 ]]; then
+				AConfFde[passphrase]="${arr[$idx_pass]}"
+				AConfFde[verifypassphrase]="${arr[$idx_verify]}"
+			fi
+			AConfFde[lvroot]="${arr[$idx_lvroot]}"
+			AConfFde[lvboot]="${arr[$idx_lvboot]}"
+			AConfFde[lvswap]="${arr[$idx_lvswap]}"
+			AConfFde[lvvar]="${arr[$idx_lvvar]}"
+			AConfFde[lvhome]="${arr[$idx_lvhome]}"
 			AConfFde[partition]="$_part"
+
+			# Descobre se a PARTIÇÃO ALVO já faz parte de algum VG — não importa
+			# o nome. Digitar um nome novo ("xfce") pra uma partição que já tem
+			# um VG antigo ("voidbrvm") faz a limpeza por nome não achar nada
+			# (o nome novo ainda não existe), deixando o antigo intocado e
+			# ativo — confirmado travando o pvcreate/vgcreate mais adiante numa
+			# tentativa real. Pergunta antes de qualquer coisa, deixando claro
+			# o que vai acontecer.
+			sh_fix_scan_lvs
+			_old_vg=$(pvs --noheadings -o pv_name,vg_name 2>/dev/null | awk -v part="${AConfFde[partition]}" '$1==part{print $2}')
+			if [[ -n "$_old_vg" && "$_old_vg" != "${AConfFde[vg]}" ]]; then
+				if ! conf "=== $ctitlemenu ===" \
+					"\n${YELLOW}$(gettext 'Já existe um Volume Group') '$_old_vg' $(gettext 'associado a esse disco.')${RST}" \
+					"\n\n${BOLD}${WHITE}$(gettext 'Deseja prosseguir e recriar?')\n\n"; then
+					continue
+				fi
+			fi
+
+			# "0" ou "0%" equivale a deixar em branco (sem volume separado) — o
+			# código de criação dos volumes só olha se está vazio ou não, então
+			# normaliza aqui pra não tentar criar um volume de tamanho zero.
+			# (a explicação de como preencher já foi mostrada na entrada da tela)
+			local _lvfield _lvval
+			for _lvfield in lvboot lvswap lvvar lvhome; do
+				_lvval="${AConfFde[$_lvfield]}"
+				if [[ "$_lvval" == "0" || "$_lvval" == "0%" ]]; then
+					AConfFde[$_lvfield]=''
+				fi
+			done
+
+			# Aceita digitar só o número (ex: "25"), sem precisar do "%" no
+			# final — completa automaticamente aqui, só na hora de usar de
+			# verdade. Não mexe em quem já digitou "%" ou tamanho absoluto
+			# (ex: "10G").
+			for _lvfield in lvroot lvboot lvswap lvvar lvhome; do
+				_lvval="${AConfFde[$_lvfield]}"
+				if [[ -n "$_lvval" && "$_lvval" =~ ^[0-9]+$ ]]; then
+					AConfFde[$_lvfield]="${_lvval}%"
+				fi
+			done
+
+			# Mostra um resumo do que foi preenchido e confirma antes de seguir
+			# pra criação de verdade — se recusar, volta pro formulário com os
+			# valores exatamente como foram digitados.
+			local _line_vg _line_root _line_boot _line_swap _line_var _line_home
+			_line_vg="$(padr 'Volume Group :' 15 ' ') ${AConfFde[vg]}"
+			_line_root="$(padr 'root :' 15 ' ') ${AConfFde[lvroot]}"
+			_line_boot="$(padr 'boot :' 15 ' ') ${AConfFde[lvboot]:-$(gettext '(nenhum)')}"
+			_line_swap="$(padr 'swap :' 15 ' ') ${AConfFde[lvswap]:-$(gettext '(nenhum)')}"
+			_line_var="$(padr 'var :' 15 ' ') ${AConfFde[lvvar]:-$(gettext '(nenhum)')}"
+			_line_home="$(padr 'home :' 15 ' ') ${AConfFde[lvhome]:-$(gettext '(nenhum)')}"
+
+			local _origroot="${AConfFde[lvroot]}" _origboot="${AConfFde[lvboot]}" _origswap="${AConfFde[lvswap]}" _origvar="${AConfFde[lvvar]}" _orighome="${AConfFde[lvhome]}"
 
 			lvunitroot="${AConfFde[lvroot]: -1}"
 			lvsizeroot="${AConfFde[lvroot]%$lvunitroot}"
+			lvunitboot="${AConfFde[lvboot]: -1}"
+			lvsizeboot="${AConfFde[lvboot]%$lvunitboot}"
 			lvunitswap="${AConfFde[lvswap]: -1}"
 			lvsizeswap="${AConfFde[lvswap]%$lvunitswap}"
 			lvunitvar="${AConfFde[lvvar]: -1}"
@@ -7784,110 +8500,227 @@ $(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" "$DSK_SERIAL"
 			lvunithome="${AConfFde[lvhome]: -1}"
 			lvsizehome="${AConfFde[lvhome]%$lvunithome}"
 			maxbytespartition="$(sh_toBytes "$size")"
-			byteslvroot="$(sh_toBytes "${AConfFde[lvroot]}")"
-			byteslvswap="$(sh_toBytes "${AConfFde[lvswap]}")"
-			byteslvvar="$(sh_toBytes "${AConfFde[lvvar]}")"
-			byteslvhome="$(sh_toBytes "${AConfFde[lvhome]}")"
+			byteslvroot="$(sh_toBytesPercent "${AConfFde[lvroot]}" "$maxbytespartition")"
+			byteslvboot="$(sh_toBytesPercent "${AConfFde[lvboot]}" "$maxbytespartition")"
+			byteslvswap="$(sh_toBytesPercent "${AConfFde[lvswap]}" "$maxbytespartition")"
+			byteslvvar="$(sh_toBytesPercent "${AConfFde[lvvar]}" "$maxbytespartition")"
+			byteslvhome="$(sh_toBytesPercent "${AConfFde[lvhome]}" "$maxbytespartition")"
 
-			if grep -o -q "$_part " <<<"$PVs"; then
-				if ! conf "=== FDE/LVM - $(gettext "Partição") === " \
-					"\n$(gettext "Partição") : '$_part'\n$(gettext "Aparentemente,") $(gettext "a partição escolhida já está atribuída como PV no sistema.")\n\n${BOLD}${WHITE}$(gettext "Continuar de qualquer maneira?")\n\n"; then
-					LFDE=false
-					LVM=false
-					continue
-				fi
-			fi
+			# (partição já ser PV é esperado ao reinstalar no mesmo disco — a
+			# limpeza em sh_make_fsLvm/sh_install já trata isso de verdade,
+			# sem precisar perguntar algo assustador aqui no meio do formulário)
 
-			if grep -o -q "${AConfFde[vg]} " <<<"$VGs"; then
-				if ! conf "=== FDE/LVM - $(gettext "Grupo de Volume") === " \
-					"\n$(gettext "Group de Volume") : '${AConfFde[vg]}'\n$(gettext "Aparentemente,") $(gettext "o VG existe no sistema.")\n\n${BOLD}${WHITE}$(gettext "Continuar mesmo assim?")\n\n"; then
-					LFDE=false
-					LVM=false
-					continue
-				fi
-			fi
+			# (a checagem de VG duplicado já foi feita antes da confirmação,
+			# usando vgscan -vvv e sabendo distinguir mesmo disco de disco
+			# diferente — não precisa repetir aqui com um snapshot velho)
 
 			if [[ -z "${AConfFde[vg]}" ]]; then
 				if ! conf "=== FDE/LVM - $(gettext "Grupo de Volume") === " \
-					"\nVolume Group = '${AConfFde[vg]}'\n$(gettext "O nome do grupo de volumes não pode estar vazio.")\n\n${BOLD}${WHITE}$(gettext "Novamente?")\n\n"; then
+					"\nVolume Group = '${AConfFde[vg]}'\n$(gettext "O nome do grupo de volumes não pode estar vazio.")\n\n${BOLD}${RED}$(gettext "Novamente?")\n\n"; then
 					LFDE=false
 					LVM=false
 					return 1
 				fi
+				AConfFde[lvroot]="$_origroot"
+				AConfFde[lvboot]="$_origboot"
+				AConfFde[lvswap]="$_origswap"
+				AConfFde[lvvar]="$_origvar"
+				AConfFde[lvhome]="$_orighome"
 				continue
 			fi
 
-			if [[ $maxbytespartition -lt $((byteslvroot + byteslvswap + byteslvhome + byteslvvar)) ]]; then
+			if [[ $maxbytespartition -lt $((byteslvroot + byteslvboot + byteslvswap + byteslvhome + byteslvvar)) ]]; then
+				local _sum_bytes=$((byteslvroot + byteslvboot + byteslvswap + byteslvhome + byteslvvar))
+				local _deficit_bytes=$((maxbytespartition - _sum_bytes))
+				local _deficit_human _sum_lines _sl_device _sl_part _sl_root _sl_boot _sl_swap _sl_var _sl_home _sl_soma
+				_deficit_human=$(numfmt --to=iec --suffix=B -- "$_deficit_bytes" 2>/dev/null)
+				_sl_device="${CYAN}$(padr "$(gettext 'Device :')" 15 ' ')${RST} ${YELLOW}${AConfFde[partition]}${RST}"
+				_sl_part="${CYAN}$(padr "$(gettext 'Tamanho :')" 15 ' ')${RST} ${YELLOW}${size}${RST}"
+				_sum_lines="${_sl_device}\n${_sl_part}"
+				if [[ -n "${AConfFde[lvroot]}" ]]; then
+					_sl_root="${CYAN}$(padr '/root :' 15 ' ')${RST} ${YELLOW}${AConfFde[lvroot]}${RST}"
+					_sum_lines+="\n${_sl_root}"
+				fi
+				if [[ -n "${AConfFde[lvboot]}" ]]; then
+					_sl_boot="${CYAN}$(padr '/boot :' 15 ' ')${RST} ${YELLOW}${AConfFde[lvboot]}${RST}"
+					_sum_lines+="\n${_sl_boot}"
+				fi
+				if [[ -n "${AConfFde[lvswap]}" ]]; then
+					_sl_swap="${CYAN}$(padr '/swap :' 15 ' ')${RST} ${YELLOW}${AConfFde[lvswap]}${RST}"
+					_sum_lines+="\n${_sl_swap}"
+				fi
+				if [[ -n "${AConfFde[lvvar]}" ]]; then
+					_sl_var="${CYAN}$(padr '/var :' 15 ' ')${RST} ${YELLOW}${AConfFde[lvvar]}${RST}"
+					_sum_lines+="\n${_sl_var}"
+				fi
+				if [[ -n "${AConfFde[lvhome]}" ]]; then
+					_sl_home="${CYAN}$(padr '/home :' 15 ' ')${RST} ${YELLOW}${AConfFde[lvhome]}${RST}"
+					_sum_lines+="\n${_sl_home}"
+				fi
+				_sl_soma="${CYAN}$(padr "$(gettext 'Soma :')" 15 ' ')${RST} ${YELLOW}${_deficit_human}${RST}"
+				_sum_lines+="\n\n${_sl_soma}"
 				if ! conf "=== FDE/LVM - $(gettext "Volumes lógicos") === " \
-					"\n$(gettext "A soma das partições excede o tamanho total do disco.")\n\n${BOLD}${WHITE}$(gettext "Novamente?")\n\n"; then
+					"\n$(gettext "A soma das partições excede o tamanho da partição de destino.")\n\n${_sum_lines}\n\n${BOLD}${RED}$(gettext "Novamente?")\n\n"; then
 					LFDE=false
 					LVM=false
 					return 1
 				fi
+				AConfFde[lvroot]="$_origroot"
+				AConfFde[lvboot]="$_origboot"
+				AConfFde[lvswap]="$_origswap"
+				AConfFde[lvvar]="$_origvar"
+				AConfFde[lvhome]="$_orighome"
 				continue
 			fi
 
 			if [[ -z "$lvunitroot" || "$lvunitroot" != @(K|M|G|T|%) ]]; then
-				if ! conf "=== FDE/LM - $(gettext "Volume lógico raiz") === " \
-					"\nThe logical volume root cannot be empty or minuscule in size and/or units out of scope (K|M|G|T|%)\nex: 25% [1-100]% or 10G [1-n](K|M|G|T).\n\n${BOLD}${WHITE}$(gettext "Novamente?")\n\n"; then
+				if ! conf "=== FDE/LVM - $(gettext "Volume lógico raiz") === " \
+					"\n$(gettext "O volume lógico root não pode ficar vazio, nem ter tamanho ou unidade fora do padrão (K|M|G|T|%).")\nex: 25% [1-100]% ou 10G [1-n](K|M|G|T).\n\n${BOLD}${RED}$(gettext "Novamente?")\n\n"; then
 					LFDE=false
 					LVM=false
 					return 1
 				fi
+				AConfFde[lvroot]="$_origroot"
+				AConfFde[lvboot]="$_origboot"
+				AConfFde[lvswap]="$_origswap"
+				AConfFde[lvvar]="$_origvar"
+				AConfFde[lvhome]="$_orighome"
+				continue
+			fi
+
+			if [[ -n "$lvunitboot" && "$lvunitboot" != @(K|M|G|T|%) ]]; then
+				if ! conf "=== FDE/LVM - $(gettext "Volume lógico") boot === " \
+					"\n$(gettext "O volume lógico boot não pode ter tamanho ou unidade fora do padrão (K|M|G|T|%).")\nex: 25% [1-100]% ou 10G [1-n](K|M|G|T).\n\n${BOLD}${RED}$(gettext "Novamente?")\n\n"; then
+					LFDE=false
+					LVM=false
+					return 1
+				fi
+				AConfFde[lvroot]="$_origroot"
+				AConfFde[lvboot]="$_origboot"
+				AConfFde[lvswap]="$_origswap"
+				AConfFde[lvvar]="$_origvar"
+				AConfFde[lvhome]="$_orighome"
 				continue
 			fi
 
 			if [[ -n "$lvunitswap" && "$lvunitswap" != @(K|M|G|T|%) ]]; then
-				if ! conf "=== FDE/LVM - $("Volume lógico") swap === " \
-					"\nThe logical volume swap cannot be empty or minuscule in size and/or units out of scope (K|M|G|T|%)\nex: 25% [1-100]% or 10G [1-n](K|M|G|T).\n\n${BOLD}${WHITE}$(gettext "Novamente?")\n\n"; then
+				if ! conf "=== FDE/LVM - $(gettext "Volume lógico") swap === " \
+					"\n$(gettext "O volume lógico swap não pode ter tamanho ou unidade fora do padrão (K|M|G|T|%).")\nex: 25% [1-100]% ou 10G [1-n](K|M|G|T).\n\n${BOLD}${RED}$(gettext "Novamente?")\n\n"; then
 					LFDE=false
 					LVM=false
 					return 1
 				fi
+				AConfFde[lvroot]="$_origroot"
+				AConfFde[lvboot]="$_origboot"
+				AConfFde[lvswap]="$_origswap"
+				AConfFde[lvvar]="$_origvar"
+				AConfFde[lvhome]="$_orighome"
 				continue
 			fi
 
 			if [[ -n "$lvunithome" && "$lvunithome" != @(K|M|G|T|%) ]]; then
-				if ! conf "=== FDE/LVM - $("Volume lógico") swap === " \
-					"\nThe logical volume swap cannot be empty or minuscule in size and/or units out of scope (K|M|G|T|%)\nex: 25% [1-100]% or 10G [1-n](K|M|G|T).\n\n${BOLD}${WHITE}$(gettext "Novamente?")\n\n"; then
+				if ! conf "=== FDE/LVM - $(gettext "Volume lógico") home === " \
+					"\n$(gettext "O volume lógico home não pode ter tamanho ou unidade fora do padrão (K|M|G|T|%).")\nex: 25% [1-100]% ou 10G [1-n](K|M|G|T).\n\n${BOLD}${RED}$(gettext "Novamente?")\n\n"; then
 					LFDE=false
 					LVM=false
 					return 1
 				fi
+				AConfFde[lvroot]="$_origroot"
+				AConfFde[lvboot]="$_origboot"
+				AConfFde[lvswap]="$_origswap"
+				AConfFde[lvvar]="$_origvar"
+				AConfFde[lvhome]="$_orighome"
 				continue
 			fi
 
 			if [[ -n "$lvunitvar" && "$lvunitvar" != @(K|M|G|T|%) ]]; then
-				if ! conf "=== FDE/LVM - $("Volume lógico") var === " \
-					"\nThe logical volume var cannot be empty or minuscule in size and/or units out of scope (K|M|G|T|%)\nex: 25% [1-100]% or 10G [1-n](K|M|G|T).\n\n${BOLD}${WHITE}$(gettext "Novamente?")\n\n"; then
+				if ! conf "=== FDE/LVM - $(gettext "Volume lógico") var === " \
+					"\n$(gettext "O volume lógico var não pode ter tamanho ou unidade fora do padrão (K|M|G|T|%).")\nex: 25% [1-100]% ou 10G [1-n](K|M|G|T).\n\n${BOLD}${RED}$(gettext "Novamente?")\n\n"; then
 					LFDE=false
 					LVM=false
 					return 1
 				fi
+				AConfFde[lvroot]="$_origroot"
+				AConfFde[lvboot]="$_origboot"
+				AConfFde[lvswap]="$_origswap"
+				AConfFde[lvvar]="$_origvar"
+				AConfFde[lvhome]="$_orighome"
 				continue
 			fi
 
 			if [[ -z "${AConfFde[passphrase]}" || "${AConfFde[passphrase]}" != "${AConfFde[verifypassphrase]}" ]]; then
 				if ! conf "=== FDE/LVM - $(gettext "Senha") === " \
-					"\nPassphrases do not match and also not be empty.\n\n${BOLD}${WHITE}$(gettext "Novamente?")\n\n"; then
+					"\n$(gettext "As senhas não conferem, ou estão vazias.")\n\n${BOLD}${RED}$(gettext "Novamente?")\n\n"; then
 					LFDE=false
 					LVM=false
 					return 1
 				fi
+				AConfFde[lvroot]="$_origroot"
+				AConfFde[lvboot]="$_origboot"
+				AConfFde[lvswap]="$_origswap"
+				AConfFde[lvvar]="$_origvar"
+				AConfFde[lvhome]="$_orighome"
 				continue
 			fi
 
+			# Só mostra o resumo pra confirmar DEPOIS de todas as validações
+			# acima passarem — evita o usuário confirmar "prosseguir" e, logo
+			# em seguida, cair num erro de validação que já era conhecido antes
+			# mesmo de perguntar (ex: soma excede o disco).
+			if ! conf "=== $ctitlemenu - $(gettext 'Confirmação') ===" \
+				"\n$(gettext 'Confira antes de prosseguir:')\n" \
+				"\n${CYAN}${_line_vg}${RST}" \
+				"\n${CYAN}${_line_root}${RST}\n${CYAN}${_line_boot}${RST}\n${CYAN}${_line_swap}${RST}\n${CYAN}${_line_var}${RST}\n${CYAN}${_line_home}${RST}" \
+				"\n\n${BOLD}${RED}$(gettext 'Deseja prosseguir com essa configuração?')\n\n"; then
+				AConfFde[lvroot]="$_origroot"
+				AConfFde[lvboot]="$_origboot"
+				AConfFde[lvswap]="$_origswap"
+				AConfFde[lvvar]="$_origvar"
+				AConfFde[lvhome]="$_orighome"
+				continue
+			fi
+
+			# O usuário digita pensando em "% do disco total" (ex: root=25% =
+			# 1/4 do disco) — mas o lvcreate usa "%FREE" (% do que ainda está
+			# livre no momento da criação, na ordem fixa root->boot->swap->
+			# var->home). Converte aqui, andando na mesma ordem, descontando
+			# tamanhos absolutos (ex: "10G") do que sobra em bytes, sem
+			# convertê-los pra %FREE (esses usam -L direto, sem cálculo).
+			#
+			# NUNCA sobrescreve AConfFde[lv*] com o valor convertido — isso é
+			# salvo no .conf e reaparece no formulário se o usuário reabrir pra
+			# editar depois (confirmado causando confusão: usuário digitou
+			# 25/5/70 e via 25%/7%/100% ao reabrir). O convertido fica isolado
+			# em _conv, usado só na construção do AmntpointFDE logo abaixo.
+			local -A _conv=([lvroot]="${AConfFde[lvroot]}" [lvboot]="${AConfFde[lvboot]}" [lvswap]="${AConfFde[lvswap]}" [lvvar]="${AConfFde[lvvar]}" [lvhome]="${AConfFde[lvhome]}")
+			local _lvseq=(lvroot lvboot lvswap lvvar lvhome)
+			local _remaining_bytes="$maxbytespartition"
+			local _f _v _bytes_needed _pct_free
+			for _f in "${_lvseq[@]}"; do
+				_v="${AConfFde[$_f]}"
+				[[ -z "$_v" ]] && continue
+				_bytes_needed=$(sh_toBytesPercent "$_v" "$maxbytespartition")
+				if [[ "$_v" == *% ]]; then
+					if [[ "$_remaining_bytes" -gt 0 ]]; then
+						_pct_free=$(awk -v b="$_bytes_needed" -v r="$_remaining_bytes" 'BEGIN{printf "%.0f", (b/r)*100}')
+					else
+						_pct_free=0
+					fi
+					_conv[$_f]="${_pct_free}%"
+				fi
+				# tamanho absoluto: mantém como está em _conv (lvcreate usa -L
+				# direto), só desconta do que resta pros percentuais seguintes.
+				_remaining_bytes=$((_remaining_bytes - _bytes_needed))
+			done
+
 			AmntpointFDE=()
-			AmntpointFDE+=(["/dev/${AConfFde[vg]}/root"]="root|$fstype|1|${AConfFde[lvroot]}|/")
-			#					[[ -n "${AConfFde[lvswap]}" && "$(sh_toBytes "${AConfFde[lvswap]}")" -gt 0 ]] &&	AmntpointFDE+=(["/dev/${AConfFde[vg]}/swap"]="swap|swap|1|${AConfFde[lvswap]}|swap")
-			#					[[ -n "${AConfFde[lvvar]}"  && "$(sh_toBytes "${AConfFde[lvvar]}")"  -gt 0 ]]	&&	AmntpointFDE+=(["/dev/${AConfFde[vg]}/var"]="var|$fstype|1|${AConfFde[lvvar]}|/var")
-			#					[[ -n "${AConfFde[lvhome]}" && "$(sh_toBytes "${AConfFde[lvhome]}")" -gt 0 ]]	&&	AmntpointFDE+=(["/dev/${AConfFde[vg]}/home"]="home|$fstype|1|${AConfFde[lvhome]}|/home")
-			[[ -n "${AConfFde[lvswap]}" ]] && AmntpointFDE+=(["/dev/${AConfFde[vg]}/swap"]="swap|swap|1|${AConfFde[lvswap]}|swap")
-			[[ -n "${AConfFde[lvvar]}" ]] && AmntpointFDE+=(["/dev/${AConfFde[vg]}/var"]="var|$fstype|1|${AConfFde[lvvar]}|/var")
-			[[ -n "${AConfFde[lvhome]}" ]] && AmntpointFDE+=(["/dev/${AConfFde[vg]}/home"]="home|$fstype|1|${AConfFde[lvhome]}|/home")
+			AmntpointFDE+=(["/dev/${AConfFde[vg]}/root"]="root|$fstype|1|${_conv[lvroot]}|/")
+			[[ -n "${AConfFde[lvboot]}" ]] && AmntpointFDE+=(["/dev/${AConfFde[vg]}/boot"]="boot|$fstype|1|${_conv[lvboot]}|/boot")
+			[[ -n "${AConfFde[lvswap]}" ]] && AmntpointFDE+=(["/dev/${AConfFde[vg]}/swap"]="swap|swap|1|${_conv[lvswap]}|swap")
+			[[ -n "${AConfFde[lvvar]}" ]] && AmntpointFDE+=(["/dev/${AConfFde[vg]}/var"]="var|$fstype|1|${_conv[lvvar]}|/var")
+			[[ -n "${AConfFde[lvhome]}" ]] && AmntpointFDE+=(["/dev/${AConfFde[vg]}/home"]="home|$fstype|1|${_conv[lvhome]}|/home")
 			;;
 		esac
-		exec 3>&-
 		if ((LCONFIGFDE)); then
 			LFDE=true
 			LVM=true
@@ -7906,13 +8739,36 @@ sh_make_fsFde() {
 	local _part
 	local label
 
+	# Cobre o caso de reaproveitar uma tabela de partições de um teste
+	# anterior sem reparticionar (sh_close_stale_crypto só rodava ligada ao
+	# sh_mkparted) — sem isso, um LUKS/VG remanescente ainda ativo em cima
+	# dessa mesma partição faz o luksFormat falhar com "dispositivo em uso".
+	sh_close_stale_crypto "${AConfFde[partition]}"
+
 	sh_info_msg "Formatando e cryptografando a unidade : ${AConfFde[partition]}"
-	printf "${AConfFde[passphrase]}" | cryptsetup luksFormat --type luks1 "${AConfFde[partition]}" --key-file=- -v 2>&1 | tee -i -a "$BOOTLOG" >"$LOGGER"
+	printf "${AConfFde[passphrase]}" | cryptsetup luksFormat --type luks1 --batch-mode "${AConfFde[partition]}" --key-file=- -v 2>&1 | tee -i -a "$BOOTLOG" >"$LOGGER"
 	evaluate_retval "${PIPESTATUS[1]}"
 
 	sh_info_msg "Abrindo a unidade cryptografada: ${AConfFde[partition]}"
 	printf "${AConfFde[passphrase]}" | cryptsetup luksOpen "${AConfFde[partition]}" "${AConfFde[vg]}" --key-file=- -v 2>&1 | tee -i -a "$BOOTLOG" >"$LOGGER"
 	evaluate_retval "${PIPESTATUS[1]}"
+}
+
+# Só é preciso ajustar quando o disco ALVO da instalação é ele mesmo uma
+# LV (ex: instalando dentro de um LV do Proxmox no host, disco aninhado)
+# — dentro de uma VM normal, o disco é bruto (/dev/sda, /dev/vda), sem
+# aninhamento nenhum, e essa configuração não faz diferença. Causa raiz
+# confirmada manualmente: com scan_lvs=0 (padrão da maioria das
+# distros), o LVM não rastreia de forma confiável PVs/VGs que moram
+# DENTRO de outra LV — vgscan até encontra, mas vgs/lvcreate/vgchange
+# normais "perdem" a referência logo depois. Idempotente — chamar mais
+# de uma vez não tem efeito colateral (só reajusta se ainda estiver 0).
+sh_fix_scan_lvs() {
+	if [[ "$(lsblk -no TYPE "${AConfDisk[_DEVICE]}" 2>/dev/null)" = "lvm" ]]; then
+		if grep -qE '^\s*#?\s*scan_lvs\s*=\s*0' /etc/lvm/lvm.conf 2>/dev/null; then
+			sed -i -E 's/^\s*#?\s*scan_lvs\s*=\s*0/\tscan_lvs = 1/' /etc/lvm/lvm.conf
+		fi
+	fi
 }
 
 sh_make_fsLvm() {
@@ -7925,6 +8781,27 @@ sh_make_fsLvm() {
 	local mntpoint
 	local lvunit
 	local aLVs=()
+
+	# Ajusta scan_lvs (ver comentário em sh_fix_scan_lvs, logo acima) —
+	# idempotente, não tem problema já ter sido ajustado antes em sh_install.
+	sh_fix_scan_lvs
+
+	# Cobre instalação anterior abortada sem limpar: VG/LVM (ou LUKS) que
+	# ficou pendurado no mesmo dispositivo, travando o pvcreate/vgcreate a
+	# seguir com "dispositivo ocupado". Roda pros dois casos (com ou sem
+	# LFDE), já que sh_close_stale_crypto (chamada dentro de sh_make_fsFde)
+	# só cobre o caminho com LUKS.
+	sh_close_stale_crypto "${AConfFde[partition]}"
+	sh_close_stale_lvm "${AConfFde[partition]}"
+
+	# pvs/vgs às vezes "não enxergam" um VG que existe de verdade (cache
+	# desatualizado, visto repetidamente em testes) — por isso sh_close_stale_lvm
+	# (que depende de pvs pra descobrir o VG) pode não achar nada pra limpar.
+	# vgremove -ff direto pelo nome esperado se mostrou confiável mesmo
+	# nesses casos — tenta incondicionalmente, sem depender de descoberta
+	# prévia (remover algo que não existe é inofensivo, só falha e segue).
+	vgchange -an "${AConfFde[vg]}" >/dev/null 2>&1
+	vgremove -ff "${AConfFde[vg]}" >/dev/null 2>&1
 
 	if $LFDE; then
 		sh_make_fsFde
@@ -7947,18 +8824,18 @@ sh_make_fsLvm() {
 	evaluate_retval "${PIPESTATUS[0]}"
 
 	#order required for creation due to issue of 100%
-	aLVs=("/dev/${AConfFde[vg]}/root" "/dev/${AConfFde[vg]}/swap" "/dev/${AConfFde[vg]}/var" "/dev/${AConfFde[vg]}/home")
+	aLVs=("/dev/${AConfFde[vg]}/root" "/dev/${AConfFde[vg]}/boot" "/dev/${AConfFde[vg]}/swap" "/dev/${AConfFde[vg]}/var" "/dev/${AConfFde[vg]}/home")
+
+	# Duas passadas: primeiro cria todos os LVs, só depois formata cada um
+	# — mais organizado que intercalar criação e formatação item a item.
 	for i in "${aLVs[@]}"; do
 		_part="$i"
-		label="$(sh_splitarray "${AmntpointFDE[$i]}" 1)"
-		fstype="$(sh_splitarray "${AmntpointFDE[$i]}" 2)"
-		format="$(sh_splitarray "${AmntpointFDE[$i]}" 3)"
 		size="$(sh_splitarray "${AmntpointFDE[$i]}" 4)"
-		mntpoint="$(sh_splitarray "${AmntpointFDE[$i]}" 5)"
 		lvunit="${size: -1}"
 
 		[[ -z "$size" ]] && continue
 
+		label="$(sh_splitarray "${AmntpointFDE[$i]}" 1)"
 		sh_info_msg "Criando o volume lógico: $label"
 		if [[ "$lvunit" = "%" ]]; then
 			lvcreate --yes --name "$label" -l "${size}FREE" "${AConfFde[vg]}" 2>&1 | tee -i -a "$BOOTLOG" >"$LOGGER"
@@ -7966,6 +8843,17 @@ sh_make_fsLvm() {
 			lvcreate --yes --name "$label" -L "${size}" "${AConfFde[vg]}" 2>&1 | tee -i -a "$BOOTLOG" >"$LOGGER"
 		fi
 		evaluate_retval "${PIPESTATUS[0]}"
+	done
+
+	for i in "${aLVs[@]}"; do
+		_part="$i"
+		label="$(sh_splitarray "${AmntpointFDE[$i]}" 1)"
+		fstype="$(sh_splitarray "${AmntpointFDE[$i]}" 2)"
+		format="$(sh_splitarray "${AmntpointFDE[$i]}" 3)"
+		size="$(sh_splitarray "${AmntpointFDE[$i]}" 4)"
+		mntpoint="$(sh_splitarray "${AmntpointFDE[$i]}" 5)"
+
+		[[ -z "$size" ]] && continue
 
 		if [[ "$format" = "1" ]]; then
 			sh_info_msg "${cmsg_FormatandoParticao} ${_part} FS ${fstype,,}"
@@ -7987,6 +8875,7 @@ sh_make_fsLvm() {
 			fi
 			evaluate_retval "${PIPESTATUS[0]}"
 		fi
+
 	done
 	_arch=$(xbps-uhelper arch)
 	export XBPS_ARCH=${_arch}
@@ -7995,15 +8884,16 @@ sh_make_fsLvm() {
 
 sh_clearVg() {
 	local _vg="$1"
-	local alogical=()
-	local alogical=("/dev/$_vg/root" "/dev/$_vg/swap" "/dev/$_vg/home" "/dev/$_vg/var")
-	local afs=("/dev/mapper/$_vg-root" "/dev/mapper/$_vg-swap" "/dev/mapper/$_vg-home" "/dev/mapper/$_vg-var")
 	local i
 
 	sh_umount_fs
-	sh_info_msg "$(gettext 'Removendo LVs (Volumes Lógicos')"
-	lvremove -ff /dev/"$_vg"/* 2>&1 | tee -i -a "$BOOTLOG" >"$LOGGER"
-	evaluate_retval "${PIPESTATUS[0]}" "$err_not_fatal"
+
+	# vgremove -ff já remove as LVs de dentro do VG sozinho — um lvremove
+	# separado antes dele é redundante e, na prática, batia no mesmo
+	# problema de cache do LVM que motivou essa função (relatava "VG not
+	# found" mesmo com o VG existindo de verdade, gerando um [ FAIL ]
+	# confuso no log por nada).
+	vgchange -an "$_vg" >/dev/null 2>&1
 
 	sh_info_msg "$(gettext 'Removendo VG (Volume Group)')"
 	vgremove -ff "$_vg" 2>&1 | tee -i -a "$BOOTLOG" >"$LOGGER"
@@ -8440,14 +9330,35 @@ sh_rebind_amntpoint_device() {
 	done
 }
 
+# Checagem rápida e ao vivo (sem depender de arrays já populados) se o
+# dispositivo tem alguma partição LUKS de uma instalação anterior. Usada
+# tanto ao escolher disco quanto ao entrar no menu FileSystem.
+sh_has_luks_remnant() {
+	local device="$1"
+	[[ -n "$device" && "$device" != "/dev/sdX" ]] || return 1
+	lsblk -no FSTYPE "$device" 2>/dev/null | grep -qx "crypto_LUKS"
+}
+
+# Aviso padrão (só OK) usado quando a detecção de LUKS remanescente acontece
+# fora de um fluxo interativo de particionamento (ex: sh_rebuild_amntpoint_for_new_disk).
+# Marca o filesystem como inválido para forçar o usuário a reparticionar.
+sh_alert_luks_remnant() {
+	LMKPARTED=false
+	LFSREVISED=false
+	alerta "${RED}${REVERSE}$(gettext '=== CONTAINER LUKS ENCONTRADO ===')" \
+		"$(gettext 'Foi encontrada uma partição LUKS de uma instalação anterior neste disco.')" \
+		"$(gettext 'Ela não será reaproveitada e não pode ser usada como está.')" \
+		"" \
+		"${BOLD}${YELLOW}$(gettext 'É necessário reparticionar o disco do zero para continuar.')${RST}"
+}
+
 sh_rebuild_amntpoint_for_new_disk() {
 	local device="${AConfDisk[_DEVICE]}"
 	local efi_set=false
-	local efi_set=false
 	local swap_set=false
-	local efi_set=false
 	local root_set=false
 	local home_set=false
+	local luks_found=false
 	local fs
 
 	[[ -n "$device" ]] || return 1
@@ -8465,6 +9376,13 @@ sh_rebuild_amntpoint_for_new_disk() {
 		# só partições
 		[[ "$TYPE_" == "part" ]] || continue
 
+		# partição já criptografada (LUKS) de instalação anterior: não é reaproveitável,
+		# não entra no mapa de mountpoints. Marca que o disco precisa ser reparticionado do zero.
+		if [[ "$FSTYPE_" == "crypto_LUKS" ]]; then
+			luks_found=true
+			continue
+		fi
+
 		# --- CASO 1: FSTYPE EXISTE ---
 		if [[ -n "$FSTYPE_" ]]; then
 			case "$FSTYPE_" in
@@ -8477,6 +9395,12 @@ sh_rebuild_amntpoint_for_new_disk() {
 				Amntpoint["$PATH_"]="none|swap|1"
 				swap_set=true
 				continue
+				;;
+			LVM2_member)
+				# Resíduo de LVM de uma instalação anterior nessa partição — não
+				# é um filesystem de verdade (não existe "mkfs.LVM2_member"),
+				# trata como ext4 reaproveitável, igual uma partição comum.
+				fs="ext4"
 				;;
 			*)
 				fs="$FSTYPE_"
@@ -8548,7 +9472,12 @@ sh_rebuild_amntpoint_for_new_disk() {
 			grep -P 'TYPE="(part)"' |
 			sort -k5,5 -k2,2
 	)
-	((${#Amntpoint[@]})) && LMKPARTED=true || LMKPARTED=false
+
+	if $luks_found; then
+		sh_alert_luks_remnant
+	else
+		((${#Amntpoint[@]})) && LMKPARTED=true || LMKPARTED=false
+	fi
 }
 
 sh_check_lock() {
@@ -8576,12 +9505,31 @@ sh_checkUpdatePackages() {
 		#sh_add_repo
 
 		if [[ ! -f "$TMP_FILE" ]]; then
-			if conf "** UPDATE - ${APP} **" "É fortemente recomendado sincronizar e atualizar este utilitário antes da instalação. \n\n${AMARELO}Deseja proceder ?"; then
-				sh_cmd_job_infobox "Aguarde alguns instantes, sincronizando e atualizando..." \
-					"xbps-install -Syuf --ignore-file-conflicts "${PackagesToUpdate[@]}" &>/dev/null"
-				sh_msg_job "Reiniciando o script pela primeira vez..."
-				touch "$TMP_FILE"
-				exec "$0" "$@"
+			# Vital em ISOs antigas: bugs já corrigidos numa versão mais nova
+			# do instalador só chegam aqui atualizando. Só é chamada quando
+			# há internet (sh_without_chroot já garante isso) — mas o pacote
+			# void-install pode estar em repositórios diferentes dependendo
+			# da ISO/distro (voidbr.org, voidlinux.com.br, chililinux).
+			# Testar só "existe internet" não garante que ESSE pacote está
+			# resolvível.
+			if xbps-query -R "${PackagesToUpdate[0]}" >/dev/null 2>&1; then
+				if conf "** UPDATE - ${APP} **" "É fortemente recomendado sincronizar e atualizar este utilitário antes da instalação. \n\n${AMARELO}Deseja proceder ?"; then
+					if sh_cmd_job_infobox "Aguarde alguns instantes, sincronizando e atualizando..." \
+						"xbps-install -Syuf --ignore-file-conflicts ${PackagesToUpdate[*]}"; then
+						sh_msg_job "Reiniciando o script pela primeira vez..."
+						touch "$TMP_FILE"
+						exec "$0" "$@"
+					else
+						# Update falhou (repositório fora do ar, pacote não
+						# encontrado, etc.) — não finge sucesso, avisa e segue
+						# com a versão atual em vez de reiniciar às cegas.
+						alerta "** UPDATE - ${APP} **" \
+							"${RED}A atualização falhou.${RST}" \
+							"\n${YELLOW}Prosseguindo com a versão atual do instalador (v${_VERSION_}).${RST}"
+					fi
+				fi
+			else
+				sh_info_msg "$(gettext 'Pacote de atualização indisponível nos repositórios configurados — prosseguindo com a versão atual do instalador') (v${_VERSION_})."
 			fi
 		fi
 		# verifica dependencias
@@ -8591,34 +9539,100 @@ sh_checkUpdatePackages() {
 	fi
 }
 
+# Teste puro de conectividade, sem efeito colateral nenhum (não mostra
+# diálogo, não oferece configurar Wi-Fi). Ao vivo — nunca usa estado salvo
+# (LHAS_INTERNET pode estar desatualizado se o usuário conectou depois via
+# o menu "Wifi"). Genérica: usar em qualquer parte do script que precise
+# saber o estado atual da rede.
+sh_has_internet() {
+	ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1
+}
+
+# Testa os repositórios conhecidos do Void, em ordem de precedência, e para
+# no primeiro que responder (não testa os outros à toa). Ter internet não
+# garante que ESSES repositórios especificamente estão no ar. Se algum
+# responder, já deixa configurado em url_mirror/AConfMirror[_MIRROR] — as
+# mesmas variáveis usadas pelo resto do script (chaves iguais às de
+# Amirror, pra ficar consistente com a tela de Mirror).
+sh_has_repo_online() {
+	local -A _repos=(
+		['void.voidbr.org']='https://void.voidbr.org/voidlinux/'
+		['void.voidlinux.com.br']='https://void.voidlinux.com.br/voidlinux/'
+		['void.chililinux.com']='https://void.chililinux.com/voidlinux/'
+	)
+	local key
+
+	sh_info_msg "$(gettext 'Testando repositórios do VoidBR...')"
+
+	# Sem internet nenhuma, nem vale a pena testar os repositórios um por
+	# um (cada tentativa pode levar até 5s de timeout).
+	if ! sh_has_internet; then
+		LREPO_ONLINE=false
+		return 1
+	fi
+
+	for key in void.voidbr.org void.voidlinux.com.br void.chililinux.com; do
+		sh_info_msg "$(gettext 'Testando repositório'): ${CYAN}${key}${RST}"
+		if [[ "$(curl -o /dev/null -s -w '%{http_code}\n' --max-time 5 "${_repos[$key]}")" = "200" ]]; then
+			AConfMirror[_MIRROR]="$key"
+			url_mirror="${_repos[$key]}"
+			LREPO_ONLINE=true
+			sh_info_msg "${GREEN}$(gettext 'Repositório online'): ${key}${RST}"
+			return 0
+		fi
+	done
+	LREPO_ONLINE=false
+	sh_info_msg "${RED}$(gettext 'Nenhum repositório respondeu')${RST}"
+	return 1
+}
+
 sh_check_internet() {
-	local url="8.8.8.8" # Servidor DNS do Google, sempre online
-	local timeout=2     # Tempo limite reduzido para resposta rápida
 	local pipe_test="1"
 
 	if sh_cmd_job "$(gettext 'Testando conexão com a internet...')" \
-		"ping -c 1 -W $timeout $url >/dev/null 2>&1" \
+		"sh_has_internet" \
 		"$err_not_fatal" "$pipe_test"; then
+		LHAS_INTERNET=true
 		return 0
 	else
 		if conf "** INTERNET **" \
 			"$(gettext 'Parece que não há uma rota disponível para a internet.') \n\n${AMARELO}$(gettext 'Deseja configurar um Wi-Fi?')"; then
-			sh_confWifi
-			return 0
+			sh_run_binary 'voidbr-wifi-setup'
+			if sh_has_internet; then
+				LHAS_INTERNET=true
+				return 0
+			else
+				LHAS_INTERNET=false
+				AConfMirror[_SOURCE]='local'
+				return 1
+			fi
 		fi
+		LHAS_INTERNET=false
+		AConfMirror[_SOURCE]='local'
 		return 1
 	fi
 }
 
-sh_change_grub() {
-	local f="${dir_install}/etc/default/grub"
-
-	sh_cmd_job "$(gettext 'Aplicando ajustes no GRUB')" "
-    if ! grep '^GRUB_DISTRIBUTOR=' '$f' | grep -Fqi '${_WM^}'; then
-      sed -i 's/^GRUB_DISTRIBUTOR=\"\\(.*\\)\"/GRUB_DISTRIBUTOR=\"\\1 ${_WM^}\"/' '$f'
-    fi
-    #sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet splash plymouth.enable=1 loglevel=4 libata.noacpi=1 acpi=force apm=power-off nowatchdog tsc=nowatchdog cryptomgr.notests no_timer_check rcupdate.rcu_expedited=1 intel_pstate=active amd_pstate=active cpuidle.governor=teo split_lock_detect=off clearcpuid=514 transparent_hugepage=never skew_tick=1 intremap=off nosoftlockup audit=0 nomce systemd.show_status=auto rd.udev.log_level=3 apparmor=1 security=apparmor vconsole.font=Uni2-Fixed16 intel_iommu=on amd_iommu=on tdx=on nvme_load=yes nouveau.modeset=1 i915.modeset=1 amdgpu.modeset=1 radeon.si_support=0 radeon.cik_support=0 amdgpu.si_support=1 amdgpu.cik_support=1 nvidia.modeset=1 nvidia_drm.modeset=1 DEEPIN_GFXMODE="|' /etc/default/grub 1>/dev/null
-  " "$err_not_fatal"
+# Instalação "local" (ISO/pendrive): por padrão não depende de rede nenhuma,
+# usando só o que já foi copiado do sistema live (rsync do squashfs, que já
+# inclui o próprio banco de dados do xbps). Se detectar internet disponível,
+# pergunta se o usuário quer aproveitar pra atualizar bootloader/pacotes base
+# durante a instalação; se não tiver rede, ou responder não, segue 100%
+# offline. Define LUPDATELOCAL, usada mais adiante em sh_install().
+sh_ask_update_local() {
+	LUPDATELOCAL=false
+	if sh_cmd_job "$(gettext 'Verificando conexão com a internet...')" \
+		"sh_has_internet" \
+		"$err_not_fatal" "1"; then
+		if conf "=== $(gettext 'ATUALIZAR PACOTES') ===" \
+			"\n${GREEN}$(gettext 'Conexão com a internet detectada.')${RST}\n" \
+			"\n$(gettext 'Os pacotes da ISO podem estar desatualizados. Deseja atualizar o bootloader e os pacotes base pela internet durante a instalação?')\n" \
+			"\n${YELLOW}$(gettext 'Se não, a instalação usa somente o que já vem no sistema live (100% offline).')${RST}"; then
+			LUPDATELOCAL=true
+		fi
+	else
+		sh_info_msg "$(gettext 'Sem conexão com a internet — instalação local seguirá 100% offline.')"
+	fi
 }
 
 sh_setEnvironment
@@ -8640,14 +9654,29 @@ sh_setLogPrefix
 
 sh_without_chroot() {
 	sh_checkDisplay
-	sh_check_internet
+	sh_check_internet && LHAS_INTERNET=true || LHAS_INTERNET=false
 	check_dependencies
-	sh_checkUpdatePackages
+	# Sem internet nenhuma, nem vale chamar — a função inteira gira em torno
+	# de checar/atualizar um pacote via xbps-query/xbps-install.
+	if $LHAS_INTERNET; then
+		sh_checkUpdatePackages
+	fi
 }
 
 sh_with_all() {
 	reset
 	#sh_update_self "$@"
+
+	# Rodando de dentro da ISO, local é o padrão: os pacotes já estão no
+	# squashfs. Vem antes do sh_loadSavedConfig de propósito — num primeiro
+	# arranque sem .conf, o sh_touchConf de lá grava já com local; e se o
+	# .conf existir, a escolha salva pelo usuário prevalece.
+	if sh_getIso; then
+		AConfMirror[_SOURCE]='local'
+		_WINDOWMANAGER=('local')
+		LONLY_TTY=false
+	fi
+
 	sh_loadSavedConfig
 	sh_disablePrintk
 	sh_loadconf
@@ -8664,6 +9693,8 @@ case " $* " in
 	sh_without_chroot
 	sh_with_all
 	grafico=1
+	#sh_timer &
+	#timer_pid=$!
 	sh_init -i "$@"
 	;;
 esac
