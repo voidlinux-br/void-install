@@ -3332,30 +3332,6 @@ sh_X11_minimal() {
 	fi
 }
 
-sh_twm_minimal() {
-	local DE='TWM Desktop'
-	local apkgs=('twm')
-	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
-sh_awesome_minimal() {
-	local DE='AWESOME Desktop'
-	local apkgs=(awesome polybar pcmanfm font-awesome)
-	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
-sh_dwm_minimal() {
-	local DE='DWM Desktop'
-	local apkgs=(dwm)
-	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
-sh_openbox_minimal() {
-	local DE='OPENBOX Desktop'
-	local apkgs=(openbox obconf)
-	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
 sh_fluxbox_meta_package() {
 	local DE='FLUXBOX Desktop'
 	local apkgs=(voidbr-fluxbox)
@@ -3439,7 +3415,7 @@ sh_server_meta_package() {
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
-sh_xorg_minimal_meta_package() {
+sh_xorg_meta_package() {
 	local DE='Meta XORG Minimal'
 	declare apkgs=(
 		voidbr-xorg-minimal
@@ -3526,13 +3502,6 @@ sh_lxde_meta_package() {
 	local apkgs=(voidbr-lxde)
 	apkgs+=(voidbr-base-config)
 	apkgs+=(voidbr-lxde-config)
-
-	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
-}
-
-sh_lxqt_minimal() {
-	local DE='LXQT Desktop'
-	local apkgs=(lxqt)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -4433,8 +4402,8 @@ sh_choose_bootloadernew() {
 	return 0
 }
 
- sh_timedatectl() {
- 	local _localtime
+sh_timedatectl() {
+	local _localtime
 
 	if [[ -L /etc/localtime ]]; then
 		_localtime=$(readlink -f /etc/localtime)
@@ -4446,20 +4415,20 @@ sh_choose_bootloadernew() {
 	fi
 
 	if command -v timedatectl >/dev/null 2>&1 && timedatectl >/dev/null 2>&1; then
- 		_localtime=$(awk '{print $3}' <(grep 'Time zone' <(timedatectl)))
- 		if [[ -n "$_localtime" ]]; then
- 			echo "$_localtime"
- 			return 0
- 		fi
- 	else
- 		_localtime=$(cut -d'"' -f2 <(grep TIMEZONE /etc/rc.conf))
- 		if [[ -n "$_localtime" ]]; then
- 			echo "$_localtime"
- 			return 0
- 		fi
- 	fi
- 	return 1
- }
+		_localtime=$(awk '{print $3}' <(grep 'Time zone' <(timedatectl)))
+		if [[ -n "$_localtime" ]]; then
+			echo "$_localtime"
+			return 0
+		fi
+	else
+		_localtime=$(cut -d'"' -f2 <(grep TIMEZONE /etc/rc.conf))
+		if [[ -n "$_localtime" ]]; then
+			echo "$_localtime"
+			return 0
+		fi
+	fi
+	return 1
+}
 
 sh_timedatectlOLD() {
 	local _localtime
@@ -5339,29 +5308,29 @@ sh_checkdisk() {
 }
 
 sh_confadduser() {
-  local size
-  local model
-  local chostname
-  local usertext
-  local exit_status
-  local -a aUser
+	local size
+	local model
+	local chostname
+	local usertext
+	local exit_status
+	local -a aUser
 
-  # O hostname automático acompanha a edição: sem isto, preencher a tela
-  # Extra antes de escolher o WM congela 'voidbr-base' (LEXTRA=true trava o
-  # recálculo). Nome digitado pelo usuário é preservado — só o que casa com
-  # o padrão gerado aqui é refeito.
-  chostname="${AsUser[chostname]}"
-  if [[ -z "$chostname" || "$chostname" == "${chostname_base,,}" || "$chostname" == "${chostname_base,,}-"* ]]; then
-    chostname="${chostname_base}-$(sh_get_edition_label)"
-    chostname="${chostname,,}"
-  fi
-  AsUser[chostname]="$chostname"
+	# O hostname automático acompanha a edição: sem isto, preencher a tela
+	# Extra antes de escolher o WM congela 'voidbr-base' (LEXTRA=true trava o
+	# recálculo). Nome digitado pelo usuário é preservado — só o que casa com
+	# o padrão gerado aqui é refeito.
+	chostname="${AsUser[chostname]}"
+	if [[ -z "$chostname" || "$chostname" == "${chostname_base,,}" || "$chostname" == "${chostname_base,,}-"* ]]; then
+		chostname="${chostname_base}-$(sh_get_edition_label)"
+		chostname="${chostname,,}"
+	fi
+	AsUser[chostname]="$chostname"
 
-  sh_setUser
-  size=$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 2)
-  model=$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 4)
+	sh_setUser
+	size=$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 2)
+	model=$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 4)
 
-  while true; do
+	while true; do
 		exec 3>&1
 		usertext=$(${DIALOG} \
 			--title "$(gettext "=== EXTRA ===")" \
@@ -5376,7 +5345,7 @@ sh_confadduser() {
 			"${cmsg_Extra2}: " 2 1 "${AsUser[cuser]}" 2 28 20 0 0 \
 			"${cmsg_Extra3} (${AsUser[cpass]}): " 3 1 "${AsUser[cpass]}" 3 28 20 0 1 \
 			"${cmsg_Extra4} (${AsUser[cpassroot]}): " 4 1 "${AsUser[cpassroot]}" 4 28 20 0 1 \
-      "Hostname: " 5 1 "${AsUser[chostname]}" 5 28 20 0 0 \
+			"Hostname: " 5 1 "${AsUser[chostname]}" 5 28 20 0 0 \
 			"${cmsg_Extra6}: " 6 1 "${AConfDisk[_DEVICE]}" 6 28 20 0 2 \
 			"Tam/Model: " 7 1 "$size/$model" 7 28 20 0 2 \
 			"${cmsg_Teclado}: " 8 1 "${AConfLocale[_KEYMAP]}" 8 28 20 0 2 \
@@ -5407,7 +5376,7 @@ sh_confadduser() {
 
 			if [[ "${AsUser[cuser]}" == "root" ]]; then
 				if ! conf "$(gettext "=== USUÁRIO ===")" "\n${cmsg_adduser1}"; then
-  				LEXTRA=false
+					LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5415,7 +5384,7 @@ sh_confadduser() {
 
 			if [[ -z "${AsUser[cuser]}" ]]; then
 				if ! conf "=== ${cmsg_Usuario^^} ===" "\n${cmsg_adduser2}"; then
-				  LEXTRA=false
+					LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5424,7 +5393,7 @@ sh_confadduser() {
 			# Verificar se usuario começa com um número
 			if [[ "${AsUser[cuser]}" =~ ^[0-9] ]]; then
 				if ! conf "=== ${cmsg_Usuario^^} ===" "\n${cmsg_adduser5}"; then
-				  LEXTRA=false
+					LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5433,7 +5402,7 @@ sh_confadduser() {
 			# Verificar se string1 começa com uma letra maiúscula
 			if [[ "${AsUser[cuser]}" =~ ^[A-Z] ]]; then
 				if ! conf "=== ${cmsg_Usuario^^} ===" "\n${cmsg_adduser6}"; then
-				  LEXTRA=false
+					LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5441,7 +5410,7 @@ sh_confadduser() {
 
 			if [[ -z "${AsUser[cpass]}" ]]; then
 				if ! conf "=== ${cmsg_Usuario^^} ===" "\n${cmsg_adduser3}"; then
-				  LEXTRA=false
+					LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5449,7 +5418,7 @@ sh_confadduser() {
 
 			if [[ -z "${AsUser[cpassroot]}" ]]; then
 				if ! conf "=== ROOT ===" "\n${cmsg_adduser4}"; then
-				  LEXTRA=false
+					LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5457,7 +5426,7 @@ sh_confadduser() {
 
 			if [[ -z "${AsUser[chostname]}" ]]; then
 				if ! conf "=== ${cmsg_Usuario^^} ===" "\n${cmsg_adduser7}"; then
-				  LEXTRA=false
+					LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5596,25 +5565,20 @@ sh_choose_wm() {
 	aWm[tty]="${cmsg_tty}"
 	aWm[server]="${cmsg_server}"
 	aWm[xorg]="Xorg $(gettext "Minimal")"
-	aWm[bspwm]="$(gettext "Tiling window manager based on binary space partitioning")"
+	aWm[bspwm]="Bspwm"
 	aWm[cinnamon]="Cinnamon"
 	aWm[enlightenment]="Enlightenment"
 	aWm[gnome]="Gnome"
 	aWm[plasma]="Kde Plasma"
 	aWm[xfce]="Xfce 4"
 	aWm[mate]="Mate"
-	aWm[awesome]="Awesome"
-	aWm[dwm]="Dwm"
 	aWm[fluxbox]="Fluxbox"
-	aWm[hyprland]="(Experimental) Hyprland"
+	aWm[hyprland]="Hyprland"
 	aWm[i3]="I3"
 	aWm[lxde]="Lxde"
-	aWm[lxqt]="Lxqt"
-	aWm[openbox]="Openbox"
-	aWm[sway]="(Experimental) $(gettext "Tiling Wayland compositor compatible with i3")"
-	aWm[mango]="(Experimental) $(gettext "Dwl-based wayland compositor using scenefx")"
-	aWm[river]="(Experimental) $(gettext "Dynamic tiling Wayland compositor")"
-	aWm[twm]="Twm"
+	aWm[sway]="Sway"
+	aWm[mango]="Mango"
+	aWm[river]="River"
 
 	for x in "${!aWm[@]}"; do
 		aFlag[$x]='off'
@@ -5623,13 +5587,6 @@ sh_choose_wm() {
 	for x in "${_WINDOWMANAGER[@]}"; do
 		aFlag[$x]='on'
 	done
-
-	#  	awesome "${aWm[awesome]}" "${aFlag[awesome]}" \
-	#  	dwm "${aWm[dwm]}" "${aFlag[dwm]}" \
-	#  	lxde "${aWm[lxde]}" "${aFlag[lxde]}" \
-	#  	lxqt "${aWm[lxqt]}" "${aFlag[lxqt]}" \
-	#  	twm "${aWm[twm]}" "${aFlag[twm]}" \
-	#		openbox "${aWm[openbox]}" "${aFlag[openbox]}" \
 
 	wm=$(${DIALOG} \
 		--backtitle "$ccabec" \
@@ -7141,12 +7098,7 @@ sh_install_DE() {
 		"local") : ;;
 		"tty") sh_base_meta_package ;;
 		"server") sh_server_meta_package ;;
-		"xorg") sh_xorg_minimal_meta_package ;;
-		"awesome") sh_awesome_minimal ;;
-		"dwm") sh_dwm_minimal ;;
-		"lxqt") sh_lxqt_minimal ;;
-		"openbox") sh_openbox_minimal ;;
-		"twm") sh_twm_minimal ;;
+		"xorg") sh_xorg_meta_package ;;
 		"bspwm") sh_bspwm_meta_package ;;
 		"lxde") sh_lxde_meta_package ;;
 		"river") sh_river_meta_package ;;
@@ -7256,7 +7208,7 @@ sh_install() {
 		# "local" — não pergunta de novo aqui, só respeita a resposta.
 		:
 	else
-    sh_checkNet "$url_mirror" || return 1
+		sh_checkNet "$url_mirror" || return 1
 	fi
 	if [[ "${AConfMirror[_SOURCE]}" = "network" ]]; then
 		sh_checkTarball
@@ -7332,8 +7284,8 @@ sh_install() {
 					# source!=local, ou LCUSTOM=true: instalação completa.
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Kernel')" "${akernel[*]}"
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Firmware')" "${afirmware[*]}"
-					sh_install_pkgs_in_chroot "$(gettext 'Instalando Daemons')" "${aPackageDaemons[*]}" 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Utilitários')" "${aUtility[*]}"
-  				sh_install_pkgs_in_chroot "$(gettext 'Instalando Extras')" "${aExtra[*]}"
+					sh_install_pkgs_in_chroot "$(gettext 'Instalando Daemons')" "${aPackageDaemons[*]}" sh_install_pkgs_in_chroot "$(gettext 'Instalando Utilitários')" "${aUtility[*]}"
+					sh_install_pkgs_in_chroot "$(gettext 'Instalando Extras')" "${aExtra[*]}"
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Pacotes customizados')" "${aCustomPackages[*]}"
 				fi
 			fi
@@ -7371,7 +7323,7 @@ sh_install() {
 				elif $LXORG; then
 					:
 				else
-					# WM sem meta-pacote próprio ainda (awesome, bspwm, dwm, openbox) — precisa do X11 base.
+					# WM sem meta-pacote próprio ainda — precisa do X11 base.
 					sh_X11_minimal
 				fi
 			fi
@@ -7439,10 +7391,10 @@ sh_install() {
 			1) poweroff ;;
 			3) reboot ;;
 			esac
- 		else
+		else
 			sh_umount_fs
 			die "${cmsg_ERRO} tar #$?. ${cmsg_ErroTar} $_TARBALL_ROOTFS"
- 		fi
+		fi
 		exit 0
 	} # > out & sh_monitor
 	#	killall dialog
@@ -7586,13 +7538,13 @@ ${BOLD}${WHITE}Partition : ${RED}$_PART\n" 8 75
 		sh_getBootEFI && AConfDisk[_DISKTABLE]='EFI' || AConfDisk[_DISKTABLE]='GPT_BIOS'
 	fi
 
-#	sh_getBootEFI && LEFI=true || LEFI=false
+	#	sh_getBootEFI && LEFI=true || LEFI=false
 	if sh_getBootEFI && [[ "${AConfDisk[_DISKTABLE]}" = "EFI" ]]; then
 		LEFI=true
 	else
 		LEFI=false
 	fi
- 	LBIOS=true
+	LBIOS=true
 
 	if $LEFI; then
 		if [[ "$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 7)" != "gpt" ]]; then
@@ -8029,11 +7981,11 @@ sh_getparamfile() {
 	return 1
 }
 
- sh_main_menu() {
- 	local cOK="${RST}${BOLD}${GREEN}✓ ${RST}${YELLOW}"
- 	local cNOK="${RST}${BOLD}${RED}✗ ${cERRO}[${cmsg_Nao_definido}]${RST} ● "
- 	local cWARN="${RST}${YELLOW}"
- 	local cERRO="${RST}${UNDERLINE}${BOLD}${RED}"
+sh_main_menu() {
+	local cOK="${RST}${BOLD}${GREEN}✓ ${RST}${YELLOW}"
+	local cNOK="${RST}${BOLD}${RED}✗ ${cERRO}[${cmsg_Nao_definido}]${RST} ● "
+	local cWARN="${RST}${YELLOW}"
+	local cERRO="${RST}${UNDERLINE}${BOLD}${RED}"
 
 	# Detecta o timezone do host assim que o menu abre, em vez de esperar o
 	# usuário abrir a tela de Timezone — sem isso, quem nunca abre aquele
@@ -8044,7 +7996,7 @@ sh_getparamfile() {
 		_hosttz=$(sh_timedatectl) && AConfLocale[_TIMEZONE]="$_hosttz"
 	fi
 
- 	sh_disk_part_info
+	sh_disk_part_info
 
 	while true; do
 		sh_touchConf
@@ -9190,7 +9142,7 @@ $cLB7 ${ccolor}↵ ENTER${RESET} ou ${ccolor}BARRA DE ESPAÇO${RESET} $cLB8"
 	cmsg_adduser4=$(gettext "Senha de root não pode ser vazia! Novamente?")
 	cmsg_adduser5=$(gettext "Usuário não pode iniciar com números! Novamente?")
 	cmsg_adduser6=$(gettext "Usuário não pode iniciar com letras maiúsculas! Novamente?")
-  cmsg_adduser7=$(gettext "Hostname não pode estar vazio! Novamente?")
+	cmsg_adduser7=$(gettext "Hostname não pode estar vazio! Novamente?")
 	cmsg_adduserCancel=$(gettext "Cadastro de usuário cancelado")
 	cmsg_redewifi=$(gettext "Rede Wi-Fi")
 	cmsg_senhawifi=$(gettext "Senha Wi-Fi")
