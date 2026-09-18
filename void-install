@@ -2926,9 +2926,9 @@ sh_make_fstab() {
 				continue
 			fi
 
-			if [ "$mntpoint" = "none" ] && [ "$format" = 0 ]; then
-				continue
-			fi
+			if [ "$mntpoint" = "none" ] && [ "$fstype" = "-" ]; then
+ 				continue
+ 			fi
 
 			if [ -n "$mntpoint" ]; then
 				if [ "$mntpoint" = '/boot/efi' ]; then
@@ -3310,9 +3310,9 @@ sh_mount_fs() {
 			continue
 		fi
 
-		if [[ "$mntpoint" = "none" && "$format" = "0" ]]; then
-			continue
-		fi
+		if [[ "$mntpoint" = "none" && "$fstype" = "-" ]]; then
+ 			continue
+ 		fi
 
 		if [[ -n "$mntpoint" ]]; then
 			sh_info_msg "${cmsg_MontandoParticao} ${_part} ${red}(${mntpoint})${rst} ${cmsg_Em} $dir_install${mntpoint}"
@@ -7986,15 +7986,6 @@ sh_main_menu() {
 	local cNOK="${RST}${BOLD}${RED}✗ ${cERRO}[${cmsg_Nao_definido}]${RST} ● "
 	local cWARN="${RST}${YELLOW}"
 	local cERRO="${RST}${UNDERLINE}${BOLD}${RED}"
-
-	# Detecta o timezone do host assim que o menu abre, em vez de esperar o
-	# usuário abrir a tela de Timezone — sem isso, quem nunca abre aquele
-	# menu instala com 'America/Sao_Paulo' fixo, mesmo rodando noutro fuso.
-	# Só roda se ainda não houver timezone configurado (ex.: por -f/--file).
-	if ! $LTIMEZONE; then
-		local _hosttz
-		_hosttz=$(sh_timedatectl) && AConfLocale[_TIMEZONE]="$_hosttz"
-	fi
 
 	sh_disk_part_info
 
