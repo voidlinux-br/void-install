@@ -4,8 +4,8 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: chili-tradutor-go 2.1.24-20260816\n"
-"POT-Creation-Date: 2026-09-18 14:08-0400\n"
-"PO-Revision-Date: 2026-09-18 14:08-0400\n"
+"POT-Creation-Date: 2026-09-18 14:43-0400\n"
+"PO-Revision-Date: 2026-09-18 14:43-0400\n"
 "Last-Translator: Vilmar Catafesta <vcatafesta@gmail.com>\n"
 "Language-Team: Portuguese <https://github.com/chililinux/chili-tradutor-go>\n"
 "MIME-Version: 1.0\n"
@@ -1645,7 +1645,7 @@ msgid "Sair sem instalar"
 msgstr ""
 
 #: void-install:9029
-msgid "Somente terminal, sem interface gráfica"
+msgid "Base, sem interface gráfica"
 msgstr ""
 
 #: void-install:9030

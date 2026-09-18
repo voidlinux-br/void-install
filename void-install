@@ -4,7 +4,7 @@
 #
 #  void-install
 #  Created: 2022/12/24
-#  Updated: sex 18 set 2026 10:47:16 -04
+#  Updated: sex 18 set 2026 14:44:08 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -5570,7 +5570,7 @@ sh_choose_wm() {
 	aWm[enlightenment]="Enlightenment"
 	aWm[gnome]="Gnome"
 	aWm[plasma]="Kde Plasma"
-	aWm[xfce]="Xfce 4"
+	aWm[xfce]="Xfce"
 	aWm[mate]="Mate"
 	aWm[fluxbox]="Fluxbox"
 	aWm[hyprland]="Hyprland"
@@ -7745,7 +7745,7 @@ sh_choose_Partition() {
 		((nlen += 6))
 		part=$(${DIALOG} \
 			--defaultno \
-			--default-item "${AsFs[_DEVICE]}p1" \
+			--default-item "${AsFs[_DEVICE]}$(sh_getNvme)1" \
 			--backtitle "$ccabec" \
 			--title "${cmsg_TitleFileSystem}" \
 			--ok-label "${cmsg_Mudar}" \
@@ -9026,7 +9026,7 @@ $cLB7 ${ccolor}↵ ENTER${RESET} ou ${ccolor}BARRA DE ESPAÇO${RESET} $cLB8"
 	cmsg_Disco=$(gettext "Armazenamento")
 	cmsg_Teclado=$(gettext "Teclado")
 	cmsg_SairSemInstalar=$(gettext "Sair sem instalar")
-	cmsg_tty=$(gettext "Somente terminal, sem interface gráfica")
+	cmsg_tty=$(gettext "Base, sem interface gráfica")
 	cmsg_server=$(gettext "Servidor Void")
 	cmsg_descMirror=$(gettext "Selecionar espelho dos pacotes")
 	cmsg_descDisco=$(gettext "Selecionar disco e partições")
