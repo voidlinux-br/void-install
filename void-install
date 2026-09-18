@@ -4,7 +4,7 @@
 #
 #  void-install
 #  Created: 2022/12/24
-#  Updated: ter 15 set 2026 00:15:13 -04
+#  Updated: sex 18 set 2026 10:47:16 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -51,7 +51,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.9.15-20260915'
+readonly _VERSION_='3.9.18-20260918'
 declare -g DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr
 	chroot blkid fdisk parted lsblk curl xz tee
 	mkfs.vfat mkfs.xfs mkfs.ntfs mkfs.jfs mkfs.btrfs mkfs.f2fs mkfs.nilfs2
@@ -132,16 +132,7 @@ declare LXORG=false
 declare LSWAY=false
 declare LMANGO=false
 declare LHYPRLAND=false
-declare LXFCE=false
-declare LFLUXBOX=false
-declare LBSPWM=false
-declare LLXDE=false
-declare LI3=false
-declare LGNOME=false
-declare LPLASMA=false
-declare LMATE=false
-declare LCINNAMON=false
-declare LENLIGHTENMENT=false
+declare LRIVER=false
 declare LMETA=false
 #
 declare DEFITEM
@@ -272,6 +263,7 @@ declare _WIFI_NETWORK="wifi_ssid"
 declare _WIFI_PASSWORD="wifi_password"
 declare Interrupted="$(gettext "Interrompido! Saindo...")"
 trap 'printf "\n${red}$Interrupted\n"; cleanup; exit 0' INT TERM HUP
+trap 'mountpoint -q "$dir_install" 2>/dev/null && sh_umount_fs' EXIT
 
 cleanup() {
 	# Silencia erros no cleanup para evitar loops de erro na saída
@@ -790,10 +782,11 @@ sh_choose_common_packages() {
 			parallel
 			voidbr-utils
 			voidbr-nano-config
-			voidbr-webapps
 			chili-utils
 			chili-clonedisk
 		)
+		$LONLY_TTY || aExtra+=(voidbr-webapps)
+
 	fi
 
 	if $LSERVER; then
@@ -805,48 +798,6 @@ sh_choose_common_packages() {
 	#common
 	aPackageDaemons+=(NetworkManager dhcpcd)
 	aServicesTTY+=(NetworkManager)
-
-	if [[ "${AConfMirror[_SOURCE]}" = "local" ]]; then
-		return
-	fi
-
-	if $LMETA; then
-		return
-	fi
-
-	if $LXORG; then
-		return
-	fi
-
-	if ! $LONLY_TTY; then
-		declare -ga aXorg=(xorg xinit xterm xorg-fonts dbus-x11 elogind dbus-elogind polkit-elogind xdg-user-dirs xrdb xorg-server-xwayland)
-		declare -ga aVideo=(mesa-dri linux-firmware-intel xf86-video-amdgpu xf86-video-ati mesa-nouveau-dri libavif libheif gdk-pixbuf libheif-pixbuf-loader)
-		declare -ga aPulseaudio=(pulseaudio pavucontrol pasystray gst-plugins-bad1 gst-plugins-good1 gst-plugins-ugly1 gst-plugins-base1 alsa-plugins-pulseaudio alsa-utils)
-		declare -ga aPipewire=(pipewire wireplumber alsa-pipewire pulseaudio-utils pavucontrol libspa-bluetooth libjack-pipewire alsa-plugins-pulseaudio alsa-utils)
-
-		if $LCUSTOM; then
-			declare -ga aBluetooth=(bluez bluez-alsa bluedevil blueman bluez-deprecated gnome-bluetooth1 blueberry)
-			declare -ga aTerminal=(rxvt-unicode)
-			declare -ga aNetworkX=(gvfs gvfs-smb gvfs-mtp gvfs-afc gvfs-cdda gvfs-gphoto2 udisks2)
-			declare -ga aUtilityX=(xkill lm_sensors)
-			declare -ga aUtility=(binutils bc)
-		fi
-
-		aFonts+=(noto-fonts-emoji)
-		aFonts+=(noto-fonts-cjk)
-		aFonts+=(dejavu-fonts-ttf)
-		aFonts+=(font-fira-ttf)
-		aFonts+=(font-firacode)
-		aFonts+=(font-hack-ttf)
-		aFonts+=(ttf-jetbrains-mono-nerd)
-		#
-		aIconsAndThemes+=(Adapta adwaita-icon-theme arc-theme)
-		aTerminal+=(xfce4-terminal)
-		aBrowser+=(firefox firefox-i18n-$(sh_get_language_without_utf8))
-		aFilemanager+=(octoxbps)
-		aUtilityX+=(chili-iso2usb voidbr-iso-writer)
-		aNetworkX+=(network-manager-applet)
-	fi
 
 }
 
@@ -989,18 +940,9 @@ sh_touchConf() {
 		declare -p LSWAY
 		declare -p LMANGO
 		declare -p LHYPRLAND
-		declare -p LXFCE
-		declare -p LFLUXBOX
-		declare -p LBSPWM
-		declare -p LLXDE
-		declare -p LI3
+		declare -p LRIVER
 		declare -p LMETA
-		declare -p LGNOME
-		declare -p LPLASMA
 		declare -p LXORG
-		declare -p LENLIGHTENMENT
-		declare -p LMATE
-		declare -p LCINNAMON
 		declare -p LSERVER
 		declare -p LDHCP
 		declare -p LCUSTOM
@@ -2421,6 +2363,7 @@ sh_mkparted() {
 			cnextini="4MiB"
 			((++cnextpart))
 			CSCRIPT+="mkpart primary fat32 ${cini} ${cnextini} set 1 bios_grub on name 1 BIOS "
+			Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}${cnextpart}"]="none|-|0")
 
 			#efi
 			((++cnextpart))
@@ -2501,6 +2444,14 @@ sh_mkparted() {
 			fi
 
 		fi
+
+		# wipefs por partição (abaixo, depois do parted) só limpa dentro dos
+		# limites das partições NOVAS. Se o disco veio de um layout anterior
+		# diferente (ex.: MBR_BIOS trocado por GPT_BIOS/EFI), sinais de
+		# filesystem das partições ANTIGAS que caem fora dessas novas
+		# fronteiras nunca são tocados — ficam enroscados no disco. Zera o
+		# disco inteiro antes de escrever a tabela nova.
+		wipefs -a "${AConfDisk[_DEVICE]}" >/dev/null 2>&1
 
 		parted --align=opt --script "${AConfDisk[_DEVICE]}" -- "$CSCRIPT" 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
 		evaluate_retval "${PIPESTATUS[0]}"
@@ -2703,6 +2654,7 @@ sh_make_fs() {
 	local _PART
 	local format
 	local fstype
+	local mntpoint
 
 	declare -A fsparms=(
 		[ext2]="-F -L VOIDBR"
@@ -2721,8 +2673,19 @@ sh_make_fs() {
 	sh_check_util_fs
 	for i in "${!Amntpoint[@]}"; do
 		_PART="$i"
+		mntpoint="$(sh_splitarray "${Amntpoint[$i]}" 1)"
 		fstype="$(sh_splitarray "${Amntpoint[$i]}" 2)"
 		format="$(sh_splitarray "${Amntpoint[$i]}" 3)"
+
+		# No layout LVM/FDE, a entrada com mntpoint "/" não é um filesystem —
+		# é a partição bruta que sh_make_fsLvm/sh_make_fsFde vai transformar
+		# em container LUKS/PV logo abaixo (AConfFde[partition] aponta pra
+		# ela). Formatar como ext4 aqui não dá erro nenhum, só desperdiça
+		# tempo: o luksFormat sobrescreve o cabeçalho segundos depois e todo
+		# o conteúdo do ext4 recém-criado vira lixo dentro do container.
+		if ($LFDE || $LVM) && [[ "$mntpoint" = "/" ]]; then
+			continue
+		fi
 
 		if [[ "$format" = "1" ]]; then
 			sh_cmd_job "${cmsg_FormatandoParticao} ${_PART} FS ${fstype,,}" "
@@ -2953,12 +2916,17 @@ sh_make_fstab() {
 			fstype="$(sh_splitarray "${Amntpoint[$i]}" 2)"
 			format="$(sh_splitarray "${Amntpoint[$i]}" 3)"
 
+			fsorder=1
 			if [ "$fstype" = "f2fs" -o "$fstype" = "btrfs" -o "$fstype" = "xfs" -o "$fstype" = "reiserfs" ]; then
 				fsorder=0
 			fi
 
 			if [ "$fstype" = "swap" ]; then
 				echo "UUID=$(blkid -o value -s UUID "${_part}") none swap none,nofail 0 0" >>"$dir_install/etc/fstab"
+				continue
+			fi
+
+			if [ "$mntpoint" = "none" ] && [ "$format" = 0 ]; then
 				continue
 			fi
 
@@ -2979,9 +2947,12 @@ sh_make_fstab() {
 				fi
 			fi
 		done
-		#		evaluate_retval "$?"
+	#		evaluate_retval "$?"
 	else
-		sh_info_msb "${cmsg_Gerando} fstab pass1"
+		sh_info_msg "${cmsg_Gerando} fstab pass1"
+		echo "tmpfs /tmp tmpfs defaults,nosuid,nodev,noatime,mode=1777 0 0" >"$dir_install/etc/fstab"
+		echo "proc /proc proc nodev,noexec,nosuid 0 0" >>"$dir_install/etc/fstab"
+
 		for i in "${!AmntpointFDE[@]}"; do
 			_part="$i"
 			label="$(sh_splitarray "${AmntpointFDE[$i]}" 1)"
@@ -3008,19 +2979,18 @@ sh_make_fstab() {
 			format="$(sh_splitarray "${Amntpoint[$i]}" 3)"
 
 			if [[ "$mntpoint" = "/boot/efi" ]]; then
-				echo "UUID=$(blkid -o value -s UUID "${_part}") ${mntpoint} ${fstype,,} defaults 0 $fsorder" >>"$dir_install/etc/fstab"
+				echo "UUID=$(blkid -o value -s UUID "${_part}") ${mntpoint} ${fstype,,} defaults 0 2" >>"$dir_install/etc/fstab"
 				break
 			fi
 		done
 		#		evaluate_retval "$?"
 	fi
 
-	sh_chroot_job "${cmsg_Gerando} fstab pass2" \
-		"sed 's/#.*//' /etc/fstab | column --table --table-columns SOURCES,DIR,TYPE,OPTIONS,DUMP,PASS --table-hide - >/tmp/fstab" "$err_not_fatal"
-	sh_chroot_job "${cmsg_Gerando} fstab pass3" \
-		"sed -i 's/SOURCES/#SOURCE/' /tmp/fstab" "$err_not_fatal"
-	sh_chroot_job "${cmsg_Gerando} fstab pass4" \
-		"cp /tmp/fstab /etc/fstab" "$err_not_fatal"
+	sh_chroot_job "${cmsg_Gerando} fstab pass2" "
+    sed 's/#.*//' /etc/fstab | column --table --table-columns SOURCES,DIR,TYPE,OPTIONS,DUMP,PASS --table-hide - >/tmp/fstab
+    sed -i 's/SOURCES/#SOURCE/' /tmp/fstab
+    cp /tmp/fstab /etc/fstab
+  " $err_not_fatal
 }
 
 sh_activating_services() {
@@ -3056,7 +3026,7 @@ sh_activating_services() {
 	# Roda antes do loop de aServicesX, que é quem cria o link do DM escolhido.
 	# O continue protege o escolhido, então se o usuário não trocou nada,
 	# nenhum link é removido.
-	if [[ "${AConfMirror[_SOURCE]}" = "local" ]] && $LUPDATELOCAL; then
+	if [[ "${AConfMirror[_SOURCE]}" = "local" ]] && $LUPDATELOCAL && [[ "$_DISPLAYMANAGER" != "None" ]]; then
 		for service in lightdm sddm gdm lxdm; do
 			[[ "$service" = "$_DISPLAYMANAGER" ]] && continue
 			sh_chroot_job "$(gettext 'Desativando serviço') $service" \
@@ -3276,6 +3246,7 @@ sh_mount_fs() {
 	local _part
 	local mntpoint
 	local fstype
+	local format
 
 	if ! $LVM; then
 		for i in "${!Amntpoint[@]}"; do
@@ -3339,6 +3310,10 @@ sh_mount_fs() {
 			continue
 		fi
 
+		if [[ "$mntpoint" = "none" && "$format" = "0" ]]; then
+			continue
+		fi
+
 		if [[ -n "$mntpoint" ]]; then
 			sh_info_msg "${cmsg_MontandoParticao} ${_part} ${red}(${mntpoint})${rst} ${cmsg_Em} $dir_install${mntpoint}"
 			mkdir -p "$dir_install${mntpoint}"
@@ -3351,8 +3326,10 @@ sh_mount_fs() {
 sh_X11_minimal() {
 	local apkgs=()
 
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando META Pacote') voidbr-xorg-common" "voidbr-xorg-common"
-	sh_install_pkgs_in_chroot "$(gettext 'Instalando META Pacote') voidbr-gui-common" "voidbr-gui-common"
+	if ! $LMETA; then
+		sh_install_pkgs_in_chroot "$(gettext 'Instalando META Pacote') voidbr-xorg-common" "voidbr-xorg-common"
+		sh_install_pkgs_in_chroot "$(gettext 'Instalando META Pacote') voidbr-gui-common" "voidbr-gui-common"
+	fi
 }
 
 sh_twm_minimal() {
@@ -3494,7 +3471,7 @@ sh_i3_meta_package() {
 	local DE='I3 Desktop'
 	local apkgs=(voidbr-i3)
 	apkgs+=(voidbr-base-config)
-	apkgs+=(voidbr-i3wm-config)
+	apkgs+=(voidbr-i3-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -4193,6 +4170,7 @@ sh_chooseSource() {
 					_WINDOWMANAGER=('local')
 					AConfMirror[_SOURCE]=$src
 					LONLY_TTY=false
+					_DISPLAYMANAGER='None'
 					sh_ask_update_local
 
 					if $LUPDATELOCAL; then
@@ -4416,25 +4394,36 @@ sh_choose_bootloadernew() {
 	local cloader
 	local current_loader="${AConfBootLoader[_LOADER]:-grub}"
 
-	array+=("grub" "$(gettext 'GRand Unified Bootloader 2 (recomendado)')" "$([[ $current_loader == grub ]] && echo on || echo off)")
-	array+=("limine" "$(gettext 'Modern, secure, portable, multiprotocol bootloader and boot manager')" "$([[ $current_loader == limine ]] && echo on || echo off)")
+	while true; do
+		array=()
+		array+=("grub" "$(gettext 'GRand Unified Bootloader 2 (recomendado)')" "$([[ $current_loader == grub ]] && echo on || echo off)")
+		array+=("limine" "$(gettext 'Modern, secure, portable, multiprotocol bootloader and boot manager')" "$([[ $current_loader == limine ]] && echo on || echo off)")
 
-	cloader=$(${DIALOG} \
-		--title "${cmsg_descBootLoader}" \
-		--default-item "${current_loader}" \
-		--colors \
-		--cancel-label "${cmsg_ButtonBack}" \
-		--ok-label "${cmsg_Aceitar}" \
-		--radiolist "${cmsg_MENU}\n\n$cextra" \
-		12 00 0 "${array[@]}" 2>&1 >/dev/tty)
+		cloader=$(${DIALOG} \
+			--title "${cmsg_descBootLoader}" \
+			--default-item "${current_loader}" \
+			--colors \
+			--cancel-label "${cmsg_ButtonBack}" \
+			--ok-label "${cmsg_Aceitar}" \
+			--radiolist "${cmsg_MENU}\n\n$cextra" \
+			12 00 0 "${array[@]}" 2>&1 >/dev/tty)
 
-	exit_status=$?
+		exit_status=$?
 
-	case $exit_status in
-	"$D_ESC" | "$D_CANCEL")
-		return 1
-		;;
-	esac
+		case $exit_status in
+		"$D_ESC" | "$D_CANCEL")
+			return 1
+			;;
+		esac
+
+		if [[ "$cloader" == "limine" && "${AConfDisk[_DISKTABLE]}" == "MBR_BIOS" ]]; then
+			alerta "${cmsg_BootLoader^^}" "${RED}✗ ${cmsg_LimineNaoSuportaMbr}"
+			current_loader="grub"
+			continue
+		fi
+
+		break
+	done
 
 	LLOADER=true
 	AConfBootLoader[_LOADER]="$cloader"
@@ -4444,7 +4433,35 @@ sh_choose_bootloadernew() {
 	return 0
 }
 
-sh_timedatectl() {
+ sh_timedatectl() {
+ 	local _localtime
+
+	if [[ -L /etc/localtime ]]; then
+		_localtime=$(readlink -f /etc/localtime)
+		_localtime="${_localtime#*/zoneinfo/}"
+		if [[ -n "$_localtime" && -e "/usr/share/zoneinfo/$_localtime" ]]; then
+			echo "$_localtime"
+			return 0
+		fi
+	fi
+
+	if command -v timedatectl >/dev/null 2>&1 && timedatectl >/dev/null 2>&1; then
+ 		_localtime=$(awk '{print $3}' <(grep 'Time zone' <(timedatectl)))
+ 		if [[ -n "$_localtime" ]]; then
+ 			echo "$_localtime"
+ 			return 0
+ 		fi
+ 	else
+ 		_localtime=$(cut -d'"' -f2 <(grep TIMEZONE /etc/rc.conf))
+ 		if [[ -n "$_localtime" ]]; then
+ 			echo "$_localtime"
+ 			return 0
+ 		fi
+ 	fi
+ 	return 1
+ }
+
+sh_timedatectlOLD() {
 	local _localtime
 
 	if [[ -n $(command -v timedatectl) ]]; then
@@ -5322,28 +5339,29 @@ sh_checkdisk() {
 }
 
 sh_confadduser() {
-	local size
-	local model
-	local chostname
-	local usertext
-	local exit_status
-	local -a aUser
+  local size
+  local model
+  local chostname
+  local usertext
+  local exit_status
+  local -a aUser
 
-	# O hostname automático acompanha a edição: sem isto, preencher a tela
-	# Extra antes de escolher o WM congela 'voidbr-base' (LEXTRA=true trava o
-	# recálculo). Nome digitado pelo usuário é preservado — só o que casa com
-	# o padrão gerado aqui é refeito.
-	chostname="${AsUser[chostname]}"
-	if [[ -z "$chostname" || "$chostname" == "${chostname_base,,}-"* ]]; then
-		chostname="${chostname_base}-$(sh_get_edition_label)"
-		chostname="${chostname,,}"
-	fi
+  # O hostname automático acompanha a edição: sem isto, preencher a tela
+  # Extra antes de escolher o WM congela 'voidbr-base' (LEXTRA=true trava o
+  # recálculo). Nome digitado pelo usuário é preservado — só o que casa com
+  # o padrão gerado aqui é refeito.
+  chostname="${AsUser[chostname]}"
+  if [[ -z "$chostname" || "$chostname" == "${chostname_base,,}" || "$chostname" == "${chostname_base,,}-"* ]]; then
+    chostname="${chostname_base}-$(sh_get_edition_label)"
+    chostname="${chostname,,}"
+  fi
+  AsUser[chostname]="$chostname"
 
-	sh_setUser
-	size=$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 2)
-	model=$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 4)
+  sh_setUser
+  size=$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 2)
+  model=$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 4)
 
-	while true; do
+  while true; do
 		exec 3>&1
 		usertext=$(${DIALOG} \
 			--title "$(gettext "=== EXTRA ===")" \
@@ -5358,7 +5376,7 @@ sh_confadduser() {
 			"${cmsg_Extra2}: " 2 1 "${AsUser[cuser]}" 2 28 20 0 0 \
 			"${cmsg_Extra3} (${AsUser[cpass]}): " 3 1 "${AsUser[cpass]}" 3 28 20 0 1 \
 			"${cmsg_Extra4} (${AsUser[cpassroot]}): " 4 1 "${AsUser[cpassroot]}" 4 28 20 0 1 \
-			"Hostname: " 5 1 "${chostname}" 5 28 20 0 0 \
+      "Hostname: " 5 1 "${AsUser[chostname]}" 5 28 20 0 0 \
 			"${cmsg_Extra6}: " 6 1 "${AConfDisk[_DEVICE]}" 6 28 20 0 2 \
 			"Tam/Model: " 7 1 "$size/$model" 7 28 20 0 2 \
 			"${cmsg_Teclado}: " 8 1 "${AConfLocale[_KEYMAP]}" 8 28 20 0 2 \
@@ -5389,7 +5407,7 @@ sh_confadduser() {
 
 			if [[ "${AsUser[cuser]}" == "root" ]]; then
 				if ! conf "$(gettext "=== USUÁRIO ===")" "\n${cmsg_adduser1}"; then
-					die "$(gettext "=== USUÁRIO === ")" "${cmsg_adduserCancel}"
+  				LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5397,7 +5415,7 @@ sh_confadduser() {
 
 			if [[ -z "${AsUser[cuser]}" ]]; then
 				if ! conf "=== ${cmsg_Usuario^^} ===" "\n${cmsg_adduser2}"; then
-					die "=== ${cmsg_Usuario^^} === " "${cmsg_adduserCancel}"
+				  LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5406,7 +5424,7 @@ sh_confadduser() {
 			# Verificar se usuario começa com um número
 			if [[ "${AsUser[cuser]}" =~ ^[0-9] ]]; then
 				if ! conf "=== ${cmsg_Usuario^^} ===" "\n${cmsg_adduser5}"; then
-					die "$(gettext "=== USUÁRIO === ")" "${cmsg_adduserCancel}"
+				  LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5415,7 +5433,7 @@ sh_confadduser() {
 			# Verificar se string1 começa com uma letra maiúscula
 			if [[ "${AsUser[cuser]}" =~ ^[A-Z] ]]; then
 				if ! conf "=== ${cmsg_Usuario^^} ===" "\n${cmsg_adduser6}"; then
-					die "$(gettext "=== USUÁRIO === ")" "${cmsg_adduserCancel}"
+				  LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5423,7 +5441,7 @@ sh_confadduser() {
 
 			if [[ -z "${AsUser[cpass]}" ]]; then
 				if ! conf "=== ${cmsg_Usuario^^} ===" "\n${cmsg_adduser3}"; then
-					die "=== ${cmsg_Usuario^^} ===" "${cmsg_adduserCancel}"
+				  LEXTRA=false
 					return 1
 				fi
 				continue
@@ -5431,11 +5449,20 @@ sh_confadduser() {
 
 			if [[ -z "${AsUser[cpassroot]}" ]]; then
 				if ! conf "=== ROOT ===" "\n${cmsg_adduser4}"; then
-					die "=== ROOT === " "${cmsg_adduserCancel}"
+				  LEXTRA=false
 					return 1
 				fi
 				continue
 			fi
+
+			if [[ -z "${AsUser[chostname]}" ]]; then
+				if ! conf "=== ${cmsg_Usuario^^} ===" "\n${cmsg_adduser7}"; then
+				  LEXTRA=false
+					return 1
+				fi
+				continue
+			fi
+
 			LEXTRA=true
 			;;
 		esac
@@ -5580,7 +5607,7 @@ sh_choose_wm() {
 	aWm[dwm]="Dwm"
 	aWm[fluxbox]="Fluxbox"
 	aWm[hyprland]="(Experimental) Hyprland"
-	aWm[i3wm]="I3wm"
+	aWm[i3]="I3"
 	aWm[lxde]="Lxde"
 	aWm[lxqt]="Lxqt"
 	aWm[openbox]="Openbox"
@@ -5622,7 +5649,7 @@ sh_choose_wm() {
 		fluxbox "${aWm[fluxbox]}" "${aFlag[fluxbox]}" \
 		gnome "${aWm[gnome]}" "${aFlag[gnome]}" \
 		hyprland "${aWm[hyprland]}" "${aFlag[hyprland]}" \
-		i3wm "${aWm[i3wm]}" "${aFlag[i3wm]}" \
+		i3 "${aWm[i3]}" "${aFlag[i3]}" \
 		lxde "${aWm[lxde]}" "${aFlag[lxde]}" \
 		mango "${aWm[mango]}" "${aFlag[mango]}" \
 		mate "${aWm[mate]}" "${aFlag[mate]}" \
@@ -5650,16 +5677,7 @@ sh_choose_wm() {
 	LSWAY=false
 	LMANGO=false
 	LHYPRLAND=false
-	LXFCE=false
-	LI3=false
-	LFLUXBOX=false
-	LBSPWM=false
-	LLXDE=false
-	LGNOME=false
-	LPLASMA=false
-	LENLIGHTENMENT=false
-	LMATE=false
-	LCINNAMON=false
+	LRIVER=false
 	LXORG=false
 	LSERVER=false
 	LMETA=false
@@ -5694,55 +5712,46 @@ sh_choose_wm() {
 			;;
 		river)
 			_DISPLAYMANAGER="sddm"
+			LRIVER=true
 			LMETA=true
 			;;
 		xfce)
-			LXFCE=true
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
 			;;
-		i3wm)
-			LI3=true
+		i3)
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
 			;;
 		fluxbox)
-			LFLUXBOX=true
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
 			;;
 		bspwm)
-			LBSPWM=true
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
 			;;
 		lxde)
-			LLXDE=true
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
 			;;
 		gnome)
-			LGNOME=true
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
 			;;
 		plasma)
-			LPLASMA=true
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
 			;;
 		enlightenment)
-			LENLIGHTENMENT=true
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
 			;;
 		mate)
-			LMATE=true
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
 			;;
 		cinnamon)
-			LCINNAMON=true
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
 			;;
@@ -5755,7 +5764,7 @@ sh_choose_wm() {
 		_WM="server"
 		LONLY_TTY=true
 		LSERVER=true
-		LMETA=true
+		LMETA=false
 		AConfAudio[_AUDIOSERVER]="None"
 		_DISPLAYMANAGER="None"
 	elif [[ " ${_WINDOWMANAGER[*]} " == *" xorg "* ]]; then
@@ -5768,7 +5777,7 @@ sh_choose_wm() {
 	else
 		_WM="tty"
 		LONLY_TTY=true
-		LMETA=true
+		LMETA=false
 		AConfAudio[_AUDIOSERVER]="None"
 		_DISPLAYMANAGER="None"
 	fi
@@ -6093,7 +6102,7 @@ sh_choose_dm() {
 	LDM=true
 	_DISPLAYMANAGER="$dm"
 
-	if $LHYPRLAND || $LSWAY || $LMANGO; then
+	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER; then
 		if [[ "$dm" != "None" && "$dm" != "sddm" ]]; then
 			if conf "=== ${cmsg_Dm^^} ===" \
 				"\n${BOLD}${CYAN}$(gettext "É aconselhável escolhar sddm para compatibilidade")" \
@@ -6300,6 +6309,10 @@ sh_checkInstall() {
 		alerta "${cmsg_BootLoader^^}" "${RED}✗ ${cmsg_NotConfBootLoader}"
 		DEFITEM="${cmsg_BootLoader}"
 		return 1
+	elif [[ "${AConfBootLoader[_LOADER]}" == "limine" && "${AConfDisk[_DISKTABLE]}" == "MBR_BIOS" ]]; then
+		alerta "${cmsg_BootLoader^^}" "${RED}✗ ${cmsg_LimineNaoSuportaMbr}"
+		DEFITEM="${cmsg_BootLoader}"
+		return 1
 	elif ! $LKEYMAP; then
 		alerta "${cmsg_Teclado^^}" "${RED}✗ ${cmsg_NotConfTeclado}"
 		DEFITEM="${cmsg_Teclado}"
@@ -6396,6 +6409,7 @@ sh_confLuksBoot() {
 sh_set_edition_os_release() {
 	local name="$1"
 	local f="${dir_install}/etc/os-release"
+
 	sh_info_msg "${cmsg_Ajustando} $f"
 	[[ -f "$f" ]] || return 1
 	name="${name^}"
@@ -6493,7 +6507,6 @@ GRUB_CMDLINE_LINUX_DEFAULT="loglevel=3 quiet splash"
 GRUB_THEME="/boot/grub/themes/voidbr/theme.txt"
 EOF
 
-	echo "GRUB_THEME=/boot/grub/themes/voidbr/theme.txt" >>"$dir_install/etc/default/grub"
 	if $LOSPROBER; then
 		echo "GRUB_DISABLE_OS_PROBER=false" >>"$dir_install/etc/default/grub"
 	else
@@ -6570,7 +6583,9 @@ sh_limineInstall() {
 		# ele mesmo descobre via findmnt. Sem isso, a initramfs nunca saberia
 		# qual container destrancar. Sobrevive a updates futuros de kernel,
 		# já que update-limine relê esse arquivo toda vez que roda.
-		sh_chroot_job "Alterando /etc/default/limine" "sed -i 's/^LIMINE_CMDLINE_LINUX_DEFAULT=/#&/' /etc/default/limine 2>/dev/null || true"
+		sh_chroot_job "Alterando /etc/default/limine" "
+		  sed -i 's/^LIMINE_CMDLINE_LINUX_DEFAULT=/#&/' /etc/default/limine 2>/dev/null || true
+    "
 		echo "LIMINE_CMDLINE_LINUX_DEFAULT=\"rw loglevel=4 rd.luks.allow-discards rd.lvm.vg=${AConfFde[vg]} rd.luks.uuid=${AConfFde[uuid]}\"" >>"$dir_install/etc/default/limine"
 
 		# CRÍTICO: update-limine só COPIA a initramfs que já existe em /boot para
@@ -6598,7 +6613,7 @@ sh_limineInstall() {
 
 	if $LBIOS; then
 		sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') i386-pc" "
-      limine bios-install ${AConfDisk[_BOOTLOADER]} 1
+      limine bios-install ${AConfDisk[_BOOTLOADER]} 1 --force
 	   "
 	fi
 
@@ -6626,21 +6641,31 @@ sh_limineInstall() {
           -l '\EFI\limine\BOOTX64.EFI'
     	"
 		else
+			local vm_user vm_home vm_vars
+
 			vm_user="${SUDO_USER:-$(id -un)}"
 			vm_home=$(getent passwd "$vm_user" | cut -d: -f6)
 			vm_vars="$vm_home/.chili-fr/OVMF_VARS.4m.fd"
 
-			virt-fw-vars \
-				--inplace "$vm_vars" \
-				--append-boot-filepath "$dir_install/boot/efi/EFI/limine/BOOTX64.EFI"
+			if ! hash virt-fw-vars 2>/dev/null; then
+				sh_info_msg "${RED} ✗ ${RST} virt-fw-vars $(gettext 'não encontrado') — $(gettext 'entrada de boot não registrada na VM')"
+			elif [[ ! -f "$vm_vars" ]]; then
+				sh_info_msg "${RED} ✗ ${RST} ${vm_vars} $(gettext 'não encontrado') — $(gettext 'entrada de boot não registrada na VM')"
+			else
+				virt-fw-vars \
+					--inplace "$vm_vars" \
+					--append-boot-filepath "$dir_install/boot/efi/EFI/limine/BOOTX64.EFI" 2>&1 |
+					tee -i -a "$BOOTLOG" >"$LOGGER"
+				((PIPESTATUS[0] == 0)) || sh_info_msg "${RED} ✗ ${RST} virt-fw-vars $(gettext 'falhou') — $(gettext 'entrada de boot não registrada na VM')"
+			fi
 		fi
-
-		sh_change_limine
-
-		sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
-      update-limine || true
-    "
 	fi
+
+	sh_change_limine
+
+	sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
+    update-limine || true
+  "
 
 }
 
@@ -6828,7 +6853,7 @@ sh_get_session_name() {
 		[fluxbox]=fluxbox
 		[gnome]=gnome
 		[hyprland]=hyprland
-		[i3wm]=i3wm
+		[i3]=i3
 		[lxde]=LXDE
 		[mango]=mango
 		[mate]=mate
@@ -6930,7 +6955,7 @@ User=$user
 Session=$session
 EOF
 
-	if $LHYPRLAND || $LSWAY || $LMANGO; then
+	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER; then
 		sed -i '/^\[General\]/,/^\[/{
     /^\[/!b
     /^\[General\]/!i\
@@ -7125,7 +7150,7 @@ sh_install_DE() {
 		"bspwm") sh_bspwm_meta_package ;;
 		"lxde") sh_lxde_meta_package ;;
 		"river") sh_river_meta_package ;;
-		"i3wm") sh_i3_meta_package ;;
+		"i3") sh_i3_meta_package ;;
 		"enlightenment") sh_enlightenment_meta_package ;;
 		"fluxbox") sh_fluxbox_meta_package ;;
 		"hyprland") sh_hyprland_meta_package ;;
@@ -7231,7 +7256,7 @@ sh_install() {
 		# "local" — não pergunta de novo aqui, só respeita a resposta.
 		:
 	else
-		sh_checkNet "$url_mirror" || return 1
+    sh_checkNet "$url_mirror" || return 1
 	fi
 	if [[ "${AConfMirror[_SOURCE]}" = "network" ]]; then
 		sh_checkTarball
@@ -7273,7 +7298,10 @@ sh_install() {
 			sh_init_bind
 			sh_cmd_job "${cmsg_Copiando} /etc/resolv.conf" "cp -f /etc/resolv.conf $dir_install/etc/"
 			sh_update_mirror
-			sh_checkNet "$url_mirror" || return 1
+			sh_checkNet "$url_mirror" || {
+				sh_umount_fs
+				return 1
+			}
 
 			# Em modo local, só mexe em rede se o usuário topou (LUPDATELOCAL).
 			# Fora do modo local, mantém o comportamento de sempre (via rede).
@@ -7304,12 +7332,13 @@ sh_install() {
 					# source!=local, ou LCUSTOM=true: instalação completa.
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Kernel')" "${akernel[*]}"
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Firmware')" "${afirmware[*]}"
-					sh_install_pkgs_in_chroot "$(gettext 'Instalando Daemons')" "${aPackageDaemons[*]}"
-					sh_install_pkgs_in_chroot "$(gettext 'Instalando Utilitários')" "${aUtility[*]}"
-					sh_install_pkgs_in_chroot "$(gettext 'Instalando Extras')" "${aExtra[*]}"
+					sh_install_pkgs_in_chroot "$(gettext 'Instalando Daemons')" "${aPackageDaemons[*]}" 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Utilitários')" "${aUtility[*]}"
+  				sh_install_pkgs_in_chroot "$(gettext 'Instalando Extras')" "${aExtra[*]}"
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Pacotes customizados')" "${aCustomPackages[*]}"
 				fi
 			fi
+
+			sh_make_fstab
 
 			if [[ "${AConfBootLoader[_LOADER]}" == 'grub' ]]; then
 				sh_grubInstall
@@ -7318,7 +7347,6 @@ sh_install() {
 			fi
 
 			sh_set_edition_os_release "$(sh_get_edition_label)"
-			sh_make_fstab
 
 			#debug $LONLY_TTY
 			if ! $LONLY_TTY; then
@@ -7411,9 +7439,10 @@ sh_install() {
 			1) poweroff ;;
 			3) reboot ;;
 			esac
-		else
+ 		else
+			sh_umount_fs
 			die "${cmsg_ERRO} tar #$?. ${cmsg_ErroTar} $_TARBALL_ROOTFS"
-		fi
+ 		fi
 		exit 0
 	} # > out & sh_monitor
 	#	killall dialog
@@ -7557,8 +7586,13 @@ ${BOLD}${WHITE}Partition : ${RED}$_PART\n" 8 75
 		sh_getBootEFI && AConfDisk[_DISKTABLE]='EFI' || AConfDisk[_DISKTABLE]='GPT_BIOS'
 	fi
 
-	sh_getBootEFI && LEFI=true || LEFI=false
-	LBIOS=true
+#	sh_getBootEFI && LEFI=true || LEFI=false
+	if sh_getBootEFI && [[ "${AConfDisk[_DISKTABLE]}" = "EFI" ]]; then
+		LEFI=true
+	else
+		LEFI=false
+	fi
+ 	LBIOS=true
 
 	if $LEFI; then
 		if [[ "$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_BOOTLOADER]}]}" 7)" != "gpt" ]]; then
@@ -7995,13 +8029,22 @@ sh_getparamfile() {
 	return 1
 }
 
-sh_main_menu() {
-	local cOK="${RST}${BOLD}${GREEN}✓ ${RST}${YELLOW}"
-	local cNOK="${RST}${BOLD}${RED}✗ ${cERRO}[${cmsg_Nao_definido}]${RST} ● "
-	local cWARN="${RST}${YELLOW}"
-	local cERRO="${RST}${UNDERLINE}${BOLD}${RED}"
+ sh_main_menu() {
+ 	local cOK="${RST}${BOLD}${GREEN}✓ ${RST}${YELLOW}"
+ 	local cNOK="${RST}${BOLD}${RED}✗ ${cERRO}[${cmsg_Nao_definido}]${RST} ● "
+ 	local cWARN="${RST}${YELLOW}"
+ 	local cERRO="${RST}${UNDERLINE}${BOLD}${RED}"
 
-	sh_disk_part_info
+	# Detecta o timezone do host assim que o menu abre, em vez de esperar o
+	# usuário abrir a tela de Timezone — sem isso, quem nunca abre aquele
+	# menu instala com 'America/Sao_Paulo' fixo, mesmo rodando noutro fuso.
+	# Só roda se ainda não houver timezone configurado (ex.: por -f/--file).
+	if ! $LTIMEZONE; then
+		local _hosttz
+		_hosttz=$(sh_timedatectl) && AConfLocale[_TIMEZONE]="$_hosttz"
+	fi
+
+ 	sh_disk_part_info
 
 	while true; do
 		sh_touchConf
@@ -9136,8 +9179,8 @@ $cLB7 ${ccolor}↵ ENTER${RESET} ou ${ccolor}BARRA DE ESPAÇO${RESET} $cLB8"
 	cmsg_ExtraNotEfi=$(gettext "✗ EFI não detectado: sistema iniciado em modo BIOS")
 	cmsg_ExtraNotEfiRecommended=$(gettext "✓ Recomendado: GPT_BIOS ou MBR_BIOS")
 	cmsg_ExtraIso=$(gettext "Detectado boot via ISO ↓ é recomendável instalar ↓")
-	cmsg_ExtraNotIso=$(gettext "ISO não detectado ↓ é recomendável usar NETWORK ↓")
-	cmsg_ExtraNotHostVoid=$(gettext "Host VOID não detectado ↓ é recomendável usar NETWORK↓")
+	cmsg_ExtraNotIso=$(gettext "ISO não detectada ↓ é recomendável usar NETWORK ou NETWORKFULL ↓")
+	cmsg_ExtraNotHostVoid=$(gettext "Host VOID não detectado ↓ é recomendável usar NETWORK ↓")
 	welcome=$(gettext "Bem-vindo ao instalador $APP")
 	escolhaIdioma=$(gettext "Escolha o idioma")
 	cmsg_Usuario=$(gettext "Usuário")
@@ -9147,6 +9190,7 @@ $cLB7 ${ccolor}↵ ENTER${RESET} ou ${ccolor}BARRA DE ESPAÇO${RESET} $cLB8"
 	cmsg_adduser4=$(gettext "Senha de root não pode ser vazia! Novamente?")
 	cmsg_adduser5=$(gettext "Usuário não pode iniciar com números! Novamente?")
 	cmsg_adduser6=$(gettext "Usuário não pode iniciar com letras maiúsculas! Novamente?")
+  cmsg_adduser7=$(gettext "Hostname não pode estar vazio! Novamente?")
 	cmsg_adduserCancel=$(gettext "Cadastro de usuário cancelado")
 	cmsg_redewifi=$(gettext "Rede Wi-Fi")
 	cmsg_senhawifi=$(gettext "Senha Wi-Fi")
@@ -9177,6 +9221,7 @@ $cLB7 ${ccolor}↵ ENTER${RESET} ou ${ccolor}BARRA DE ESPAÇO${RESET} $cLB8"
 	cmsg_NotConfDisco=$(gettext "Disco não foi configurado!")
 	cmsg_NotConfFileSystem=$(gettext "Filesystem não foi configurado!")
 	cmsg_NotConfBootLoader=$(gettext "Bootloader não foi configurado!")
+	cmsg_LimineNaoSuportaMbr=$(gettext "Limine não é compatível com tabela MBR: precisa de uma partição FAT para o /boot, que este layout não cria. Escolha GRUB, ou troque a tabela de partição para GPT.")
 	cmsg_NotConfTeclado=$(gettext "Teclado não foi configurado!")
 	cmsg_NotConfTimezone=$(gettext "Timezone não foi configurado!")
 	cmsg_NotConfWm=$(gettext "Gerenciador de Janelas não foi configurado!")
@@ -9380,6 +9425,16 @@ sh_rebuild_amntpoint_for_new_disk() {
 		# não entra no mapa de mountpoints. Marca que o disco precisa ser reparticionado do zero.
 		if [[ "$FSTYPE_" == "crypto_LUKS" ]]; then
 			luks_found=true
+			continue
+		fi
+
+		# bios_grub tem prioridade sobre qualquer FSTYPE detectado — mesmo com
+		# resíduo de vfat (ex.: sobra de uma instalação anterior que causava
+		# "contains a recognised filesystem" no limine bios-install), essa
+		# partição nunca é a EFI real. name 1 BIOS é gravado por nós mesmos em
+		# sh_mkparted, então PARTLABEL_="BIOS" identifica ela com segurança,
+		# independente do que sobrou de FSTYPE_.
+		if [[ "$PARTLABEL_" == "BIOS" || "$PARTTYPENAME_" == *BIOS* ]]; then
 			continue
 		fi
 
@@ -9681,6 +9736,7 @@ sh_with_all() {
 	sh_disablePrintk
 	sh_loadconf
 }
+_hosttz=$(sh_timedatectl) && AConfLocale[_TIMEZONE]="$_hosttz"
 
 case " $* " in
 *" -c "* | *" --chroot "*)

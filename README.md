@@ -2,7 +2,7 @@
 
 # 🔵 void-install
 
-**Instalador da comunidade VoidBR, focado em praticidade, automação e experiência moderna de instalação.**
+**Instalador da comunidade VoidBR Linux, focado em praticidade, automação e experiência moderna de instalação.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 
