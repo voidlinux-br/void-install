@@ -4,7 +4,7 @@
 #
 #  void-install
 #  Created: 2022/12/24
-#  Updated: sex 18 set 2026 14:44:08 -04
+#  Updated: dom 20 set 2026 10:44:53 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -51,7 +51,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.9.18-20260918'
+readonly _VERSION_='3.9.20-20260920'
 declare -g DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr
 	chroot blkid fdisk parted lsblk curl xz tee
 	mkfs.vfat mkfs.xfs mkfs.ntfs mkfs.jfs mkfs.btrfs mkfs.f2fs mkfs.nilfs2
@@ -133,6 +133,7 @@ declare LSWAY=false
 declare LMANGO=false
 declare LHYPRLAND=false
 declare LRIVER=false
+declare LGNOME=false
 declare LMETA=false
 #
 declare DEFITEM
@@ -941,6 +942,7 @@ sh_touchConf() {
 		declare -p LMANGO
 		declare -p LHYPRLAND
 		declare -p LRIVER
+		declare -p LGNOME
 		declare -p LMETA
 		declare -p LXORG
 		declare -p LSERVER
@@ -5635,6 +5637,7 @@ sh_choose_wm() {
 	LMANGO=false
 	LHYPRLAND=false
 	LRIVER=false
+	LGNOME=false
 	LXORG=false
 	LSERVER=false
 	LMETA=false
@@ -5672,6 +5675,11 @@ sh_choose_wm() {
 			LRIVER=true
 			LMETA=true
 			;;
+		gnome)
+			_DISPLAYMANAGER="sddm"
+			LGNOME=true
+			LMETA=true
+			;;
 		xfce)
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
@@ -5689,10 +5697,6 @@ sh_choose_wm() {
 			LMETA=true
 			;;
 		lxde)
-			_DISPLAYMANAGER="lightdm"
-			LMETA=true
-			;;
-		gnome)
 			_DISPLAYMANAGER="lightdm"
 			LMETA=true
 			;;
@@ -5804,6 +5808,7 @@ sh_choose_custom_packages() {
 
 	if ! $LONLY_TTY; then
 		aCustom['louvorja-piano']="$(gettext 'LouvorJA - PIANO - aplicativo desktop para gerenciamento de culto)')"
+		aCustom['voidbr-louvorja-piano-config']="$(gettext 'Skel config for VoidBR with LouvorJa-Piano')"
 		aCustom['voidbr-epoptes']="$(gettext 'An opensource computer lab management and monitoring tool (server)')"
 		aCustom['gwenview']="$(gettext 'Fast and easy to use image viewer by KD')"
 		aCustom['Thunar']="$(gettext 'Thunar File Manager')"
@@ -6059,11 +6064,11 @@ sh_choose_dm() {
 	LDM=true
 	_DISPLAYMANAGER="$dm"
 
-	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER; then
+	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER | $LGNOME; then
 		if [[ "$dm" != "None" && "$dm" != "sddm" ]]; then
 			if conf "=== ${cmsg_Dm^^} ===" \
 				"\n${BOLD}${CYAN}$(gettext "É aconselhável escolhar sddm para compatibilidade")" \
-				"\n\n${BOLD}${RED}$(gettext "Deseja ativar esse Display Manager?")\n\n"; then
+				"\n\n${BOLD}${RED}$(gettext "Deseja ativar o sddm como Display Manager?")\n\n"; then
 				_DISPLAYMANAGER="sddm"
 			fi
 		fi
@@ -6912,7 +6917,7 @@ User=$user
 Session=$session
 EOF
 
-	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER; then
+	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER | $LGNOME; then
 		sed -i '/^\[General\]/,/^\[/{
     /^\[/!b
     /^\[General\]/!i\
