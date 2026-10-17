@@ -4,7 +4,7 @@
 #
 #  void-install
 #  Created: 2022/12/24
-#  Updated: dom 20 set 2026 10:44:53 -04
+#  Updated: sex 16 out 2026 22:05:18 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -33,6 +33,7 @@ export LANGUAGE="${LANGUAGE:-pt_BR}"
 export TEXTDOMAINDIR=/usr/share/locale
 export TEXTDOMAIN=void-install
 export VOIDBR_INSTALLER=true
+export XBPS_PARALLEL_DOWNLOADS=16
 
 #todo
 #usermod -a -G bluetooth $USER
@@ -51,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.9.20-20260920'
+readonly _VERSION_='3.10.16-20261016'
 declare -g DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr
 	chroot blkid fdisk parted lsblk curl xz tee
 	mkfs.vfat mkfs.xfs mkfs.ntfs mkfs.jfs mkfs.btrfs mkfs.f2fs mkfs.nilfs2
@@ -130,9 +131,11 @@ declare LEXTRA=false
 declare LLOCALE=true
 declare LXORG=false
 declare LSWAY=false
+declare LUMBRIEL=false
 declare LMANGO=false
 declare LHYPRLAND=false
 declare LRIVER=false
+declare LUMBRIEL=false
 declare LGNOME=false
 declare LMETA=false
 #
@@ -750,6 +753,13 @@ sh_configure_display_manager() {
 			custom=(voidbr-lightdm-themes)
 			;;
 
+		greetd)
+			aDisplaymanager=(
+				greetd
+				noctalia-greeter
+			)
+			;;
+
 		*)
 			aDisplaymanager=()
 			custom=()
@@ -939,6 +949,7 @@ sh_touchConf() {
 		declare -p aCustomPackages
 		declare -p LONLY_TTY
 		declare -p LSWAY
+		declare -p LUMBRIEL
 		declare -p LMANGO
 		declare -p LHYPRLAND
 		declare -p LRIVER
@@ -2929,8 +2940,8 @@ sh_make_fstab() {
 			fi
 
 			if [ "$mntpoint" = "none" ] && [ "$fstype" = "-" ]; then
- 				continue
- 			fi
+				continue
+			fi
 
 			if [ -n "$mntpoint" ]; then
 				if [ "$mntpoint" = '/boot/efi' ]; then
@@ -3029,7 +3040,7 @@ sh_activating_services() {
 	# O continue protege o escolhido, então se o usuário não trocou nada,
 	# nenhum link é removido.
 	if [[ "${AConfMirror[_SOURCE]}" = "local" ]] && $LUPDATELOCAL && [[ "$_DISPLAYMANAGER" != "None" ]]; then
-		for service in lightdm sddm gdm lxdm; do
+		for service in lightdm sddm gdm lxdm greetd; do
 			[[ "$service" = "$_DISPLAYMANAGER" ]] && continue
 			sh_chroot_job "$(gettext 'Desativando serviço') $service" \
 				"rm -f /etc/runit/runsvdir/current/$service" \
@@ -3313,8 +3324,8 @@ sh_mount_fs() {
 		fi
 
 		if [[ "$mntpoint" = "none" && "$fstype" = "-" ]]; then
- 			continue
- 		fi
+			continue
+		fi
 
 		if [[ -n "$mntpoint" ]]; then
 			sh_info_msg "${cmsg_MontandoParticao} ${_part} ${red}(${mntpoint})${rst} ${cmsg_Em} $dir_install${mntpoint}"
@@ -3459,6 +3470,15 @@ sh_mango_meta_package() {
 	local apkgs=(voidbr-mango)
 	apkgs+=(voidbr-base-config)
 	apkgs+=(voidbr-mango-config)
+
+	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
+}
+
+sh_umbriel_meta_package() {
+	local DE='UMBRIEL + NOCTALIA Desktop'
+	local apkgs=(voidbr-umbriel)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-umbriel-config)
 
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
@@ -3613,6 +3633,7 @@ sh_disk_part_info() {
 	local {NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,PTTYPE,FSTYPE,PARTTYPENAME,KNAME}_
 
 	mensagem "$(gettext "=== DISCO/PARTIÇÃO ===")" "\n\n${BOLD}${WHITE}$(gettext "Aguarde... coletando informações")"
+	sh_map_dm_partitions "${AConfDisk[_DEVICE]}"
 	AARRAY_DSK_DEVICES=()
 	AARRAY_PART_DEVICES=()
 	sh_populate_nested_lvm_map
@@ -4961,26 +4982,29 @@ ${BOLD}MODEL   : ${RESET}${RED}${MODEL_ORIGEM}${RESET}\n" \
 }
 
 sh_getNvme() {
-	local segtype
 	local device="${AConfDisk[_DEVICE]}"
-
-	segtype="$(sudo lvs "$device" -o segtype --noheadings 2>/dev/null | tr -d ' ')"
-
-	case "$segtype" in
-	thin | thin-pool)
-		echo ''
-		return
-		;;
-	esac
-
 	local tran
 	local name
+	local child
+
+	# Partição já mapeada: o nome real decide, sem adivinhar pelo tipo.
+	child=$(lsblk -lnpo PATH,TYPE "$device" 2>/dev/null | awk '$2=="part"{print $1; exit}')
+	if [[ -n "$child" ]]; then
+		[[ "${child#"$device"}" == p* ]] && echo 'p' || echo ''
+		return
+	fi
 
 	name="$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_DEVICE]}]}" $DSK_NAME)"
 	tran="$(sh_splitarray "${AARRAY_DSK_DEVICES[${AConfDisk[_DEVICE]}]}" $DSK_TRAN)"
 
 	case "$tran" in
-	nvme | loop | lvm) echo 'p' ;;
+	nvme | loop) echo 'p' ;;
+	lvm)
+		# device-mapper (LV comum ou thin): parted e kpartx só colocam 'p'
+		# quando o nome termina em dígito (pve-lvm -> pve-lvm1,
+		# pve-vm--100--disk--0 -> pve-vm--100--disk--0p1).
+		[[ "${device: -1}" == [0-9] ]] && echo 'p' || echo ''
+		;;
 	#lvm) echo '' ;;
 	*)
 		case "$name" in
@@ -4990,6 +5014,34 @@ sh_getNvme() {
 		esac
 		;;
 	esac
+}
+
+# Kernel não cria nós de partição em device-mapper (LV comum ou thin):
+# a tabela fica gravada no LV (fdisk -l mostra), mas sem mapeamento em
+# /dev/mapper o lsblk não lista filho nenhum. O parted só cria esses
+# mapeamentos na sessão em que grava a tabela — após reboot do live, ou
+# em sessão restaurada via .conf, eles não existem. Recria só para o
+# disco alvo: mapear LVs de outras VMs do host deixaria esses LVs
+# "em uso" e travaria lvremove/migração no Proxmox.
+sh_map_dm_partitions() {
+	local dev="${1:-${AConfDisk[_DEVICE]}}"
+
+	[[ -b "$dev" ]] || return 0
+	[[ "$(lsblk -dno TYPE "$dev" 2>/dev/null)" = "lvm" ]] || return 0
+	lsblk -lnpo TYPE "$dev" 2>/dev/null | grep -qx part && return 0
+	[[ -n "$(blkid -p -s PTTYPE -o value "$dev" 2>/dev/null)" ]] || return 0
+
+	# partprobe primeiro: mesmo esquema de nomes usado pelo parted em
+	# sh_mkparted. kpartx só se o partprobe não criar nada.
+	partprobe "$dev" >/dev/null 2>&1
+	udevadm settle 2>/dev/null
+	lsblk -lnpo TYPE "$dev" 2>/dev/null | grep -qx part && return 0
+
+	if has_command kpartx; then
+		kpartx -a -s "$dev" >/dev/null 2>&1
+		udevadm settle 2>/dev/null
+	fi
+	lsblk -lnpo TYPE "$dev" 2>/dev/null | grep -qx part
 }
 
 sh_getlgrub() {
@@ -5306,6 +5358,7 @@ sh_checkdisk() {
 	done < <(
 		swapon --noheadings --raw | awk -v d="$device" '$1 ~ "^"d {print $1}'
 	)
+	sh_map_dm_partitions "$device"
 	return 0
 }
 
@@ -5581,6 +5634,7 @@ sh_choose_wm() {
 	aWm[sway]="Sway"
 	aWm[mango]="Mango"
 	aWm[river]="River"
+	aWm[umbriel]="Umbriel + Noctalia"
 
 	for x in "${!aWm[@]}"; do
 		aFlag[$x]='off'
@@ -5615,6 +5669,7 @@ sh_choose_wm() {
 		plasma "${aWm[plasma]}" "${aFlag[plasma]}" \
 		sway "${aWm[sway]}" "${aFlag[sway]}" \
 		river "${aWm[river]}" "${aFlag[river]}" \
+		umbriel "${aWm[umbriel]}" "${aFlag[umbriel]}" \
 		xfce "${aWm[xfce]}" "${aFlag[xfce]}" \
 		2>&1 >/dev/tty)
 
@@ -5634,6 +5689,7 @@ sh_choose_wm() {
 	# bastava "tty" vir marcado por padrão + o usuário marcar outro WM junto
 	# pra dar resultado errado dependendo da ordem de iteração).
 	LSWAY=false
+	LUMBRIEL=false
 	LMANGO=false
 	LHYPRLAND=false
 	LRIVER=false
@@ -5655,6 +5711,11 @@ sh_choose_wm() {
 		LONLY_TTY=false
 		AConfAudio[_AUDIOSERVER]="Pipewire"
 		case "$_realwm" in
+		umbriel)
+			_DISPLAYMANAGER="greetd"
+			LUMBRIEL=true
+			LMETA=true
+			;;
 		sway)
 			_DISPLAYMANAGER="sddm"
 			LSWAY=true
@@ -5800,120 +5861,239 @@ sh_configure_custom_packages() {
 	done
 }
 
+# sh_custom_add <pacote> <descrição>
+# Registra um pacote extra no tópico atual ($topico).
+# Escreve nos arrays aCustom/aTopico e na lista aTopicos de quem chamou
+# (sh_choose_custom_packages), pelo escopo dinâmico do bash.
+sh_custom_add() {
+	aCustom[$1]="$2"
+	aTopico[$1]="$topico"
+	if [[ -z "${aTopicoVisto[$topico]}" ]]; then
+		aTopicoVisto[$topico]=1
+		aTopicos+=("$topico")
+	fi
+}
+
 sh_choose_custom_packages() {
-	declare -A aFlag
-	declare -A aCustom
-	local x
-	local custom
+	local -A aCustom=()      # pacote -> descrição
+	local -A aTopico=()      # pacote -> tópico
+	local -A aTopicoVisto=() # tópicos que têm ao menos um pacote
+	local -A aSel=()         # pacote -> on/off (seleção em andamento)
+	local -a aTopicos=()     # tópicos na ordem em que aparecem no menu
+	local topico x n nitens escolha custom exit_status
+	local -a menu_items dialog_items marcados
+	local cConcluir=">> $(gettext 'Concluir')"
 
+	topico="$(gettext 'Navegadores')"
 	if ! $LONLY_TTY; then
-		aCustom['louvorja-piano']="$(gettext 'LouvorJA - PIANO - aplicativo desktop para gerenciamento de culto)')"
-		aCustom['voidbr-louvorja-piano-config']="$(gettext 'Skel config for VoidBR with LouvorJa-Piano')"
-		aCustom['voidbr-epoptes']="$(gettext 'An opensource computer lab management and monitoring tool (server)')"
-		aCustom['gwenview']="$(gettext 'Fast and easy to use image viewer by KD')"
-		aCustom['Thunar']="$(gettext 'Thunar File Manager')"
-		aCustom['thunar-archive-plugin']="$(gettext 'Create and extract archives in Thunar')"
-		aCustom['opera']="$(gettext 'Fast, secure, easy to use browser')"
-		aCustom['eog']="$(gettext 'Eye of GNOME graphics viewer program')"
-		aCustom['chromium']="$(gettext 'Google attempt at creating a safer, faster, and more stable browser')"
-		aCustom['qutebrowser']="$(gettext 'Keyboard-focused browser with a minimal GUI')"
-		aCustom['vivaldi']="$(gettext 'Advanced browser made with the power user in mind')"
-		aCustom['brave-bin']="$(gettext 'Web browser that blocks ads and trackers by default (binary release)')"
-		aCustom['celluloid']="$(gettext 'Simple GTK+ frontend for mpv')"
-		aCustom['mpv']="$(gettext 'Video player based on MPlayer/mplayer2')"
-		aCustom['cool-retro-term']="$(gettext 'Good looking terminal emulator which mimics the old cathode display')"
-		aCustom['gparted']="$(gettext 'Gnome Partition Editor)')"
-		aCustom['google-chrome']="$(gettext 'The popular web browser by Google (Stable Channel)')"
-		aCustom['libreoffice']="$(gettext 'Productivity suite')"
-		aCustom['menulibre']="$(gettext 'Advanced menu editor')"
-		aCustom['mousepad']="$(gettext 'Simple text editor for Xfce based on Leafpad')"
-		aCustom['mugshot']="$(gettext 'Program to update personal user details')"
-		aCustom['ocs-url']="$(gettext 'Install helper program for OpenCollaborationServices (ocs://)')"
-		aCustom['vlc']="$(gettext 'Cross-platform multimedia player')"
-		aCustom['samsung-unified-driver']="$(gettext 'Unified Linux Driver for Samsung printers and scanners')"
-		aCustom['splix']="$(gettext 'CUPS driver for SPL printers (Samsung and several Xerox printers)')"
-		aCustom['system-config-printer']="$(gettext 'CUPS printer configuration tool and status applet')"
-		aCustom['bluez-cups']="$(gettext 'CUPS printer backend for Bluetooth printers')"
-		aCustom['cups-pdf']="$(gettext 'PDF printer for cups')"
-		aCustom['samba-cups']="$(gettext 'SMB backend for cups (transitional dummy package)')"
-		aCustom['cups']="$(gettext 'Common Unix Printing System')"
+		sh_custom_add 'brave-bin' "$(gettext 'Navegador que bloqueia anúncios e rastreadores por padrão (versão binária)')"
+		sh_custom_add 'chromium' "$(gettext 'Navegador de código aberto do Google, mais seguro, rápido e estável')"
+		sh_custom_add 'google-chrome' "$(gettext 'O navegador popular do Google (canal estável)')"
+		sh_custom_add 'microsoft-edge-stable-bin' "$(gettext 'Navegador da Microsoft, de visual simples, mais rápido e seguro')"
+		sh_custom_add 'opera' "$(gettext 'Navegador rápido, seguro e fácil de usar')"
+		sh_custom_add 'qutebrowser' "$(gettext 'Navegador focado no teclado, com interface mínima')"
+		sh_custom_add 'vivaldi' "$(gettext 'Navegador avançado, feito para usuários exigentes')"
 	fi
 
+	topico="$(gettext 'Escritório')"
+	if ! $LONLY_TTY; then
+		sh_custom_add 'libreoffice' "$(gettext 'Suíte de escritório (texto, planilha e apresentação)')"
+		sh_custom_add 'voidbr-onlyoffice-bin' "$(gettext 'Suíte de escritório com editores de texto, planilha e apresentação')"
+	fi
+
+	topico="$(gettext 'Editores')"
+	if ! $LONLY_TTY; then
+		sh_custom_add 'visual-studio-code-bin' "$(gettext 'Visual Studio Code (vscode): editor para criar e depurar aplicações (binário oficial)')"
+		sh_custom_add 'mousepad' "$(gettext 'Editor de texto simples do Xfce, baseado no Leafpad')"
+	fi
+	sh_custom_add 'micro' "$(gettext 'Editor de texto moderno e intuitivo para o terminal')"
+	sh_custom_add 'vim' "$(gettext 'Editor Vim (clone do vi)')"
+	sh_custom_add 'neovim' "$(gettext 'Fork do Vim que melhora a experiência de uso, os plugins e as interfaces')"
+
+	topico="$(gettext 'Desenvolvimento')"
+	sh_custom_add 'harbour-bin' "$(gettext 'Compilador Harbour (linguagem xBase)')"
+	sh_custom_add 'opencode' "$(gettext 'Agente de programação de código aberto')"
+	sh_custom_add 'dosemu' "$(gettext 'Emulador de DOS')"
+	sh_custom_add 'xtools' "$(gettext 'Utilitários para trabalhar com o XBPS')"
+
+	topico="$(gettext 'Multimídia e imagens')"
+	if ! $LONLY_TTY; then
+		sh_custom_add 'mpv' "$(gettext 'Reprodutor de vídeo baseado no MPlayer/mplayer2')"
+		sh_custom_add 'celluloid' "$(gettext 'Interface GTK simples para o mpv')"
+		sh_custom_add 'vlc' "$(gettext 'Reprodutor multimídia multiplataforma')"
+		sh_custom_add 'gwenview' "$(gettext 'Visualizador de imagens rápido e fácil de usar, do KDE')"
+		sh_custom_add 'eog' "$(gettext 'Visualizador de imagens do GNOME (Eye of GNOME)')"
+	fi
+
+	topico="$(gettext 'Acesso remoto')"
+	if ! $LONLY_TTY; then
+		sh_custom_add 'anydesk-bin' "$(gettext 'Acesso remoto rápido à área de trabalho')"
+		sh_custom_add 'rustdesk-bin' "$(gettext 'Acesso remoto à área de trabalho, escrito em Rust; funciona sem configurar nada')"
+	fi
+	sh_custom_add 'tailscale' "$(gettext 'VPN fácil e segura baseada em WireGuard, com login único (SSO) e 2FA')"
+	sh_custom_add 'tmate' "$(gettext 'Compartilhamento instantâneo do terminal')"
+
+	topico="$(gettext 'Impressão')"
+	if ! $LONLY_TTY; then
+		sh_custom_add 'cups' "$(gettext 'Sistema de impressão do Linux (CUPS)')"
+		sh_custom_add 'cups-pdf' "$(gettext 'Impressora virtual que gera PDF, para o CUPS')"
+		sh_custom_add 'bluez-cups' "$(gettext 'Suporte do CUPS a impressoras Bluetooth')"
+		sh_custom_add 'samba-cups' "$(gettext 'Suporte do CUPS a impressoras compartilhadas por SMB (pacote de transição)')"
+		sh_custom_add 'splix' "$(gettext 'Driver CUPS para impressoras SPL (Samsung e várias Xerox)')"
+		sh_custom_add 'samsung-unified-driver' "$(gettext 'Driver unificado para impressoras e scanners Samsung')"
+		sh_custom_add 'system-config-printer' "$(gettext 'Configuração de impressoras do CUPS, com ícone de status')"
+	fi
+
+	topico="$(gettext 'Rede e servidores')"
 	if $LSERVER; then
-		aCustom['voidbr-network-tools']="$(gettext 'Meta‑pacote com utilitários essenciais de rede e monitoramento para Void Linux')"
+		sh_custom_add 'voidbr-network-tools' "$(gettext 'Metapacote com utilitários essenciais de rede e monitoramento')"
+	fi
+	sh_custom_add 'voidbr-samba' "$(gettext 'Servidor de arquivos, impressão e login SMB/CIFS (Samba)')"
+	sh_custom_add 'net-snmp' "$(gettext 'Conjunto de ferramentas do protocolo de gerenciamento de rede SNMP')"
+	sh_custom_add 'avahi' "$(gettext 'Descoberta de serviços na rede local (mDNS/DNS-SD)')"
+	sh_custom_add 'avahi-discover' "$(gettext 'Interface gráfica para ver os serviços descobertos pelo avahi')"
+
+	topico="$(gettext 'Laboratório (Epoptes)')"
+	if ! $LONLY_TTY; then
+		sh_custom_add 'voidbr-epoptes' "$(gettext 'Gerenciamento e monitoramento de laboratório de informática (servidor)')"
+	fi
+	sh_custom_add 'voidbr-epoptes-client' "$(gettext 'Gerenciamento e monitoramento de laboratório de informática (cliente)')"
+
+	topico="$(gettext 'Containers')"
+	sh_custom_add 'docker' "$(gettext 'Plataforma de contêineres Docker')"
+	sh_custom_add 'podman' "$(gettext 'Gerenciador simples de contêineres e imagens')"
+	sh_custom_add 'voidbr-distrobox' "$(gettext 'Use qualquer distribuição Linux dentro do seu terminal')"
+
+	topico="$(gettext 'Backup e snapshots')"
+	sh_custom_add 'timeshift' "$(gettext 'Ferramenta de restauração do sistema')"
+	sh_custom_add 'voidbr-snapper-manager' "$(gettext 'Snapshots btrfs+snapper automáticos no xbps (hooks pre/post)')"
+
+	topico="$(gettext 'Compactadores')"
+	sh_custom_add 'zip' "$(gettext 'Cria e atualiza arquivos ZIP compatíveis com o pkzip')"
+	sh_custom_add 'bzip2' "$(gettext 'Compactador de dados livre e de alta qualidade')"
+	sh_custom_add 'p7zip' "$(gettext 'Versão de linha de comando do 7zip (pacote de transição)')"
+	sh_custom_add '7zip-unrar' "$(gettext 'Compactador com alta taxa de compressão, com suporte a RAR')"
+
+	topico="$(gettext 'Sistema e utilitários')"
+	sh_custom_add 'htop' "$(gettext 'Visualizador interativo de processos')"
+	sh_custom_add 'inxi' "$(gettext 'Script completo de informações do sistema')"
+	sh_custom_add 'pfetch' "$(gettext 'Informações do sistema, escrito em POSIX sh')"
+	sh_custom_add 'dfc' "$(gettext 'Uso do espaço em disco com gráficos e cores')"
+	sh_custom_add 'irqbalance' "$(gettext 'Distribui as interrupções entre os processadores, para economia e desempenho')"
+	sh_custom_add 'acpi' "$(gettext 'Informações dos dispositivos ACPI (bateria, sensores térmicos e energia)')"
+	sh_custom_add 'acpid' "$(gettext 'Serviço ACPI (acpid) com suporte a Netlink')"
+	if ! $LONLY_TTY; then
+		sh_custom_add 'gparted' "$(gettext 'Editor de partições do GNOME')"
+		sh_custom_add 'Thunar' "$(gettext 'Gerenciador de arquivos Thunar')"
+		sh_custom_add 'thunar-archive-plugin' "$(gettext 'Cria e extrai arquivos compactados no Thunar')"
+		sh_custom_add 'menulibre' "$(gettext 'Editor avançado de menus')"
+		sh_custom_add 'mugshot' "$(gettext 'Atualiza os dados pessoais do usuário')"
+		sh_custom_add 'ocs-url' "$(gettext 'Instalador de itens do OpenCollaborationServices (links ocs://)')"
+		sh_custom_add 'cool-retro-term' "$(gettext 'Terminal com visual dos antigos monitores de tubo')"
 	fi
 
-	# tty
-	aCustom['timeshift']="$(gettext 'System restore tool')"
-	aCustom['voidbr-distrobox']="$(gettext 'Use any linux distribution inside your terminal')"
-	aCustom['net-snmp']="$(gettext 'Simple Network Management Protocol (SNMP) suite')"
-	aCustom['voidbr-samba']="$(gettext 'SMB/CIFS file, print, and login server for Unix')"
-	aCustom['docker']="$(gettext 'Docker container runtim')"
-	aCustom['podman']="$(gettext 'Simple management tool for containers and images')"
-	aCustom['voidbr-epoptes-client']="$(gettext 'An opensource computer lab management and monitoring tool (client)')"
-	aCustom['irqbalance']="$(gettext 'Handholding your interrupts for power and performance')"
-	aCustom['acpi']="$(gettext 'Informations about ACPI devices (battery, thermal sensors and power)')"
-	aCustom['acpid']="$(gettext 'ACPI Daemon (acpid) With Netlink Support)')"
-	aCustom['tailscale']="$(gettext 'Easy, secure, cross platform WireGuard, oauth2, and 2FA/SSO')"
-	aCustom['micro']="$(gettext 'Modern and intuitive terminal-based text editor')"
-	aCustom['inxi']="$(gettext 'Full featured system information script')"
-	aCustom['htop']="$(gettext 'Interactive process viewer')"
-	aCustom['vim']="$(gettext 'Vim editor (vi clone)')"
-	aCustom['neovim']="$(gettext 'Fork of Vim aiming to improve user experience, plugins and GUIs')"
-	aCustom['tmate']="$(gettext 'Instant Terminal Sharing')"
-	aCustom['bzip2']="$(gettext 'Freely available, patent free, high-quality data compressor')"
-	aCustom['p7zip']="$(gettext 'Command-line version of the 7zip compressed file archive (transitional dummy package)')"
-	aCustom['zip']="$(gettext 'Create/update ZIP files compatible with pkzip')"
-	aCustom['7zip-unrar']="$(gettext 'File archiver with a high compression ratio - RAR support')"
-	aCustom['avahi']="$(gettext 'Multicast DNS Service Discovery')"
-	aCustom['avahi-discover']="$(gettext 'Service discovery user interface for avahi')"
-	aCustom['dfc']="$(gettext 'Display file system space usage using graphs and colors')"
-	aCustom['pfetch']="$(gettext 'System information tool written in POSIX sh')"
-	aCustom['xtools']="$(gettext 'Opinionated helpers for working with XBPS')"
+	topico="$(gettext 'Igreja')"
+	if ! $LONLY_TTY; then
+		sh_custom_add 'louvorja-piano' "$(gettext 'LouvorJA - PIANO - aplicativo desktop para gerenciamento de culto')"
+		sh_custom_add 'voidbr-louvorja-piano-config' "$(gettext 'Configuração padrão (skel) do VoidBR para o LouvorJA-Piano')"
+	fi
 
+	# seleção inicial: o que já foi escolhido antes (ao voltar a esta tela)
 	for x in "${!aCustom[@]}"; do
-		aFlag[$x]='off'
+		aSel[$x]='off'
 	done
-
 	for x in "${aCustomPackages[@]}"; do
-		aFlag[$x]='on'
+		[[ -n "${aCustom[$x]}" ]] && aSel[$x]='on'
 	done
 
-	local dialog_items=()
-	for x in $(printf '%s\n' "${!aCustom[@]}" | sort); do
-		dialog_items+=(
-			"$x"
-			"${aCustom[$x]}"
-			"${aFlag[$x]}"
+	escolha="${aTopicos[0]}"
+	while true; do
+		# 1ª tela: menu de tópicos, com a contagem de marcados em cada um
+		menu_items=()
+		for topico in "${aTopicos[@]}"; do
+			n=0
+			for x in "${!aTopico[@]}"; do
+				[[ "${aTopico[$x]}" == "$topico" && "${aSel[$x]}" == 'on' ]] && ((n++))
+			done
+			if ((n == 1)); then
+				menu_items+=("$topico" "(1 $(gettext 'marcado'))")
+			elif ((n > 1)); then
+				menu_items+=("$topico" "($n $(gettext 'marcados'))")
+			else
+				menu_items+=("$topico" "")
+			fi
+		done
+		menu_items+=("$cConcluir" "$(gettext 'Aceitar os pacotes marcados')")
+
+		# altura calculada: o tamanho automático (0 70 0) erra por 1 linha
+		# porque o texto de ajuda quebra em 3 linhas, e o ">> Concluir"
+		# ficava escondido; 9 = bordas + texto de ajuda + botões
+		nitens=$((${#menu_items[@]} / 2))
+
+		escolha=$(
+			${DIALOG} \
+				--stdout \
+				--backtitle "$ccabec" \
+				--title "=== $(gettext 'Pacotes Extras') ===" \
+				--colors \
+				--default-item "$escolha" \
+				--cancel-label "${cmsg_ButtonBack}" \
+				--ok-label "$(gettext 'Abrir')" \
+				--menu "${cmsg_MENU}" \
+				$((nitens + 9)) 70 "$nitens" \
+				"${menu_items[@]}"
 		)
+		exit_status=$?
+		case $exit_status in
+		"$D_ESC" | "$D_CANCEL")
+			# Voltar: descarta tudo o que foi marcado nesta visita
+			return
+			;;
+		esac
+
+		[[ "$escolha" == "$cConcluir" ]] && break
+
+		# 2ª tela: checklist só dos pacotes do tópico escolhido
+		dialog_items=()
+		for x in $(printf '%s\n' "${!aTopico[@]}" | sort); do
+			[[ "${aTopico[$x]}" == "$escolha" ]] || continue
+			dialog_items+=("$x" "${aCustom[$x]}" "${aSel[$x]}")
+		done
+
+		custom=$(
+			${DIALOG} \
+				--stdout \
+				--backtitle "$ccabec" \
+				--title "=== $(gettext 'Pacotes Extras'): $escolha ===" \
+				--colors \
+				--cancel-label "${cmsg_ButtonBack}" \
+				--ok-label "${cmsg_Aceitar}" \
+				--checklist "${cmsg_MENU}" \
+				0 0 0 \
+				"${dialog_items[@]}"
+		)
+		exit_status=$?
+		case $exit_status in
+		"$D_ESC" | "$D_CANCEL")
+			# Voltar: mantém este tópico como estava e volta ao menu
+			continue
+			;;
+		esac
+
+		# atualiza só os pacotes deste tópico
+		for x in "${!aTopico[@]}"; do
+			[[ "${aTopico[$x]}" == "$escolha" ]] && aSel[$x]='off'
+		done
+		read -r -a marcados <<<"$custom"
+		for x in "${marcados[@]}"; do
+			aSel[$x]='on'
+		done
 	done
 
-	custom=$(
-		${DIALOG} \
-			--stdout \
-			--backtitle "$ccabec" \
-			--title "=== Pacotes Extras ===" \
-			--colors \
-			--cancel-label "${cmsg_ButtonBack}" \
-			--ok-label "${cmsg_Aceitar}" \
-			--checklist "${cmsg_MENU}" \
-			25 0 2 \
-			"${dialog_items[@]}"
-	)
-
-	# debug "$custom"
-
-	exit_status=$?
-	case $exit_status in
-	"$D_ESC" | "$D_CANCEL")
-		return
-		;;
-	esac
-
-	# mapfile -t aCustomPackages= <<<"$custom"
-	# read -r -a aCustomPackages <<< "$custom"
-	aCustomPackages=($(strtoarray "$custom"))
-
+	aCustomPackages=()
+	for x in $(printf '%s\n' "${!aSel[@]}" | sort); do
+		[[ "${aSel[$x]}" == 'on' ]] && aCustomPackages+=("$x")
+	done
 }
 
 sh_configure_dhcpcd_static_ip_dialog() {
@@ -6033,6 +6213,7 @@ sh_choose_dm() {
 	aDm[sddm]="Display manager moderno, Xorg e Wayland"
 	aDm[gdm]="Moderno, Xorg e Wayland"
 	aDm[lightdm]="Leve e flexível, Xorg (Wayland limitado)"
+	aDm[greetd]="Minimal and flexible login manager daemon"
 	aDm[None]="None"
 
 	for x in "${!aDm[@]}"; do
@@ -6051,6 +6232,7 @@ sh_choose_dm() {
 		sddm "${aDm[sddm]}" "${aFlag[sddm]}" \
 		gdm "${aDm[gdm]}" "${aFlag[gdm]}" \
 		lightdm "${aDm[lightdm]}" "${aFlag[lightdm]}" \
+		greetd "${aDm[greetd]}" "${aFlag[greetd]}" \
 		None "${aDm[None]}" "${aFlag[None]}" \
 		2>&1 >/dev/tty)
 
@@ -6070,6 +6252,16 @@ sh_choose_dm() {
 				"\n${BOLD}${CYAN}$(gettext "É aconselhável escolhar sddm para compatibilidade")" \
 				"\n\n${BOLD}${RED}$(gettext "Deseja ativar o sddm como Display Manager?")\n\n"; then
 				_DISPLAYMANAGER="sddm"
+			fi
+		fi
+	fi
+
+	if $LUMBRIEL; then
+		if [[ "$dm" != "None" && "$dm" != "greetd" ]]; then
+			if conf "=== ${cmsg_Dm^^} ===" \
+				"\n${BOLD}${CYAN}$(gettext "É aconselhável escolhar greetd para compatibilidade")" \
+				"\n\n${BOLD}${RED}$(gettext "Deseja ativar o greetd como Display Manager?")\n\n"; then
+				_DISPLAYMANAGER="greetd"
 			fi
 		fi
 	fi
@@ -6800,7 +6992,7 @@ sh_install_pkgs_in_chroot() {
 		"$err_not_fatal"
 }
 
-# Nome da sessão gravado no autologin do DM (sddm/gdm/lxdm/lightdm).
+# Nome da sessão gravado no autologin do DM (sddm/gdm/lxdm/lightdm/greetd).
 # Mapa chave→sessão: o .desktop nem sempre usa o nome do WM (lxde → LXDE).
 # Sessões vêm de /usr/share/{xsessions,wayland-sessions}.
 # tty/server/xorg ficam de fora: não têm sessão, e nesses casos
@@ -6823,6 +7015,7 @@ sh_get_session_name() {
 		[river]=river
 		[sway]=sway
 		[xfce]=xfce
+		[umbriel]=umbriel
 	)
 
 	for x in "${_WINDOWMANAGER[@]}"; do
@@ -6917,7 +7110,7 @@ User=$user
 Session=$session
 EOF
 
-	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER | $LGNOME; then
+	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER | $LGNOME | $LUMBRIEL; then
 		sed -i '/^\[General\]/,/^\[/{
     /^\[/!b
     /^\[General\]/!i\
@@ -6975,6 +7168,46 @@ DefaultSession=${session}.desktop
 EOF
 
 	sh_change_accountsservice_user
+
+}
+
+sh_fix_gnome_wayland_session() {
+	local file
+
+	for file in \
+		"$dir_install/usr/share/wayland-sessions/gnome-wayland.desktop" \
+		"$dir_install/usr/share/wayland-sessions/gnome.desktop"; do
+		[ -f "$file" ] || continue
+
+		grep -q '^Exec=/usr/bin/dbus-run-session /usr/bin/gnome-session$' "$file" &&
+			grep -q '^TryExec=/usr/bin/dbus-run-session$' "$file" &&
+			continue
+
+		sed -i \
+			-e 's|^Exec=.*|Exec=/usr/bin/dbus-run-session /usr/bin/gnome-session|' \
+			-e 's|^TryExec=.*|TryExec=/usr/bin/dbus-run-session|' \
+			"$file"
+	done
+}
+
+sh_update_greetd_conf() {
+	local cuser="${AsUser[cuser]}"
+	local cfile="$dir_install/etc/greetd/config.toml"
+
+	sh_info_msg "Customizando Greetd $cfile"
+	mkdir -p "$dir_install/etc/greetd/"
+
+	cat >"$cfile" <<EOF
+[terminal]
+vt = 7
+
+[general]
+source_profile = false
+
+[default_session]
+command = "/usr/local/bin/noctalia-greeter-session"
+user = "_greeter"
+EOF
 
 }
 
@@ -7116,6 +7349,7 @@ sh_install_DE() {
 		"xfce") sh_xfce_meta_package ;;
 		"cinnamon") sh_cinnamon_meta_package ;;
 		"sway") sh_sway_meta_package ;;
+		"umbriel") sh_umbriel_meta_package ;;
 		"mango") sh_mango_meta_package ;;
 		"mate") sh_mate_meta_package ;;
 		esac
@@ -7354,8 +7588,10 @@ sh_install() {
 			sddm) sh_update_sddm_conf ;;
 			gdm) sh_update_gdm_conf ;;
 			lightdm) sh_update_lightdm_conf ;;
+			greetd) sh_update_greetd_conf ;;
 			esac
 
+			sh_fix_gnome_wayland_session
 			sh_activating_services
 
 			if $LSERVER; then
@@ -9499,7 +9735,7 @@ sh_check_lock() {
 
 sh_checkUpdatePackages() {
 	local TMP_FILE="/tmp/$(basename "$0").restarted"
-	local PackagesToUpdate=(void-install)
+	local PackagesToUpdate=(xbps void-install)
 
 	sh_msg_job "Distro detectada : ${CYAN}${DISTRO}${RST}"
 
