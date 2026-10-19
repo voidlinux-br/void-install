@@ -4,7 +4,7 @@
 #
 #  void-install
 #  Created: 2022/12/24
-#  Updated: sex 16 out 2026 22:05:18 -04
+#  Updated: seg 19 out 2026 12:38:48 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.10.16-20261016'
+readonly _VERSION_='3.10.19-20261019'
 declare -g DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr
 	chroot blkid fdisk parted lsblk curl xz tee
 	mkfs.vfat mkfs.xfs mkfs.ntfs mkfs.jfs mkfs.btrfs mkfs.f2fs mkfs.nilfs2
@@ -2543,6 +2543,21 @@ sh_update_mirror() {
   " $err_not_fatal
 }
 
+sh_update_repository_main() {
+	local cdir="$dir_install/etc/xbps.d"
+	local conf="$cdir/00-repository-main.conf"
+
+	[[ -e "$cdir/01-voidbr.conf" ]] || return 0
+
+	sh_cmd_job "${cmsg_Configurando} /etc/xbps.d/00-repository-main.conf" '
+		printf "%s\n" \
+			"repository=https://repo-fastly.voidlinux.org/current" \
+			"#repository=https://repo-fastly.voidlinux.org/current/nonfree" \
+			"#repository=https://repo-fastly.voidlinux.org/current/multilib" \
+			"#repository=https://repo-fastly.voidlinux.org/current/multilib/nonfree" >"$conf"
+	' $err_not_fatal
+}
+
 sh_update_rc_conf() {
 	local cfile_rc="$dir_install/etc/rc.conf"
 	local cpath_font="$dir_install/usr/share/kbd/consolefonts"
@@ -4216,6 +4231,7 @@ sh_choose_fstype() {
 	local cnewmenu
 	local exit_status
 	local array=()
+	local akeys=()
 	local x
 
 	Afs[xfs]="SGI's XFS"
@@ -4235,7 +4251,8 @@ sh_choose_fstype() {
 		oldfstype=${AConfDisk[_FILESYSTEM]}
 	fi
 
-	for x in "${!Afs[@]}"; do
+	mapfile -t akeys < <(printf '%s\n' "${!Afs[@]}" | sort)
+	for x in "${akeys[@]}"; do
 		[[ "$oldfstype" = "$x" ]] && Aflag[$x]='on' || Aflag[$x]='off'
 		array+=("$x" "${Afs[$x]}" "${Aflag[$x]}")
 	done
@@ -7612,6 +7629,8 @@ sh_install() {
         rm -fv /var/cache/xbps/*.xbps
         rm -fv /var/cache/xbps/*.sig*
       "
+
+			sh_update_repository_main
 
 			if $LHYPRLAND; then
 				sh_configure_hyprland_audio
