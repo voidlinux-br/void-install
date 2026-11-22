@@ -4,7 +4,7 @@
 #
 #  void-install
 #  Created: 2022/12/24
-#  Updated: seg 19 out 2026 12:38:48 -04
+#  Updated: sex 20 nov 2026 20:36:58 -04
 #
 #  Copyright (c) 2022-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  All rights reserved.
@@ -52,7 +52,7 @@ shopt -s extglob
 
 #system
 readonly APP="${0##*/}"
-readonly _VERSION_='3.10.19-20261019'
+readonly _VERSION_='3.11.21-20261120'
 declare -g DEPENDENCIES=(dialog rsync awk tar sed cat grep sort tr
 	chroot blkid fdisk parted lsblk curl xz tee
 	mkfs.vfat mkfs.xfs mkfs.ntfs mkfs.jfs mkfs.btrfs mkfs.f2fs mkfs.nilfs2
@@ -110,6 +110,12 @@ declare LDM=true
 declare LAUTO=true
 declare LMKPARTED=false
 declare LMKPARTED_DEVICE=''
+declare LMKPARTED_SIG=''
+# Disco em que o usuário respondeu "Usar" na tela de usar ou particionar, e a
+# assinatura dele naquela hora: se o disco não mudou, não pergunta de novo.
+declare LUSAR_DEVICE=''
+declare LUSAR_SIG=''
+declare -gA AmntpointAuto=()
 declare LUPDATELOCAL=false
 declare LHAS_INTERNET=false
 declare LREPO_ONLINE=true
@@ -132,6 +138,7 @@ declare LLOCALE=true
 declare LXORG=false
 declare LSWAY=false
 declare LUMBRIEL=false
+declare LCOSMIC=false
 declare LMANGO=false
 declare LHYPRLAND=false
 declare LRIVER=false
@@ -141,7 +148,7 @@ declare LMETA=false
 #
 declare DEFITEM
 #
-declare -gi njobs=73
+declare -gi njobs=76
 declare -gi ncounter=0
 declare -gi quiet=0
 declare -gi grafico=1
@@ -159,7 +166,7 @@ declare -gA AsUser=(
 	[cpass]='voidlinux'
 	[cpassroot]='voidlinux'
 	[chostname]='voidbr'
-	[cgroups]='wheel,audio,video,tty,floppy,cdrom,optical,kvm,xbuilder'
+	[cgroups]='wheel,audio,video,tty,floppy,cdrom,optical,kvm,xbuilder,network'
 )
 #
 declare -gA AConfFde=(
@@ -754,10 +761,14 @@ sh_configure_display_manager() {
 			;;
 
 		greetd)
-			aDisplaymanager=(
-				greetd
-				noctalia-greeter
-			)
+			if $LCOSMIC; then
+				aDisplaymanager=(greetd)
+			else
+				aDisplaymanager=(
+					greetd
+					noctalia-greeter
+				)
+			fi
 			;;
 
 		*)
@@ -950,6 +961,7 @@ sh_touchConf() {
 		declare -p LONLY_TTY
 		declare -p LSWAY
 		declare -p LUMBRIEL
+		declare -p LCOSMIC
 		declare -p LMANGO
 		declare -p LHYPRLAND
 		declare -p LRIVER
@@ -969,6 +981,9 @@ sh_touchConf() {
 		declare -p LKERNEL
 		declare -p LMKPARTED
 		declare -p LMKPARTED_DEVICE
+		declare -p LMKPARTED_SIG
+		declare -p LUSAR_DEVICE
+		declare -p LUSAR_SIG
 		declare -p LFSREVISED
 		declare -p LVM
 		declare -p LFDE
@@ -984,6 +999,7 @@ sh_touchConf() {
 		declare -p AsFs
 		declare -p Amntpoint
 		declare -p AmntpointFDE
+		declare -p AmntpointAuto
 		declare -p AConfDisk
 		declare -p AConfAudio
 		declare -p AConfKernel
@@ -1116,7 +1132,7 @@ sh_setUser() {
 	AsUser[cpass]=${AsUser[cpass]:-voidlinux}
 	AsUser[cpassroot]=${AsUser[cpassroot]:-voidlinux}
 	AsUser[chostname]=${AsUser[chostname]:-voidbr}
-	AsUser[cgroups]=${AsUser[cgroups]:-"wheel,audio,video,floppy,cdrom,optical,kvm,xbuilder"}
+	AsUser[cgroups]=${AsUser[cgroups]:-"wheel,audio,video,tty,floppy,cdrom,optical,kvm,xbuilder,network"}
 }
 
 # Testa se o terminal suporta caracteres gráficos estendidos
@@ -1345,6 +1361,9 @@ sh_info_msg() {
 
 msg() {
 	((++ncounter))
+	# njobs é uma estimativa; quando há mais etapas que o previsto, o total
+	# acompanha o contador em vez de mostrar 074/073.
+	((ncounter > njobs)) && njobs=$ncounter
 	cinfo="$1"
 	cfmt="$(fmt)"
 	ufmt=$(unfmt "$cfmt")
@@ -1352,7 +1371,8 @@ msg() {
 	logmessage="$ufmt $last_msg"
 	logmessage=${logmessage/INFO /}
 	clean_logmessage="$(strip_ansi "$logmessage")"
-	printf "%s\n" "$(timespec) [ $cinfo ]$ufmt ${clean_logmessage}" 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
+	# clean_logmessage já começa com o contador ($ufmt): não repetir aqui.
+	printf "%s\n" "$(timespec) [ $cinfo ]${clean_logmessage}" 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
 
 	if ((grafico)); then
 		logmessage="$(strip_ansi "$last_msg")"
@@ -2128,6 +2148,34 @@ sh_getPartitionsPercent() {
 			continue
 		fi
 
+		# GPT: a 1ª partição depois da EFI (/boot, ou swap, ou a raiz) começa em
+		# 512 MiB e termina na porcentagem acumulada do disco. Se esse fim cair
+		# antes de 768 MiB, o parted falha no meio e o disco fica pela metade.
+		if [[ "${AsDiskPercent[_DISKTABLE]}" != "MBR_BIOS" ]]; then
+			local nbytes npct nmin cprimeira
+			nbytes="$(lsblk -bdno SIZE "${AConfDisk[_DEVICE]}" 2>/dev/null)"
+			if [[ -n "$nbytes" ]] && ((nbytes > 0)); then
+				if ((AsDiskPercent[boot] > 0)); then
+					npct=$((AsDiskPercent[boot]))
+					cprimeira="/boot"
+				elif ((AsDiskPercent[swap] > 0)); then
+					npct=$((AsDiskPercent[swap]))
+					cprimeira="swap"
+				else
+					npct=$((AsDiskPercent[root]))
+					cprimeira="root (/)"
+				fi
+				nmin=$(((768 * 1024 * 1024 * 100 + nbytes - 1) / nbytes))
+				if ((nbytes * npct / 100 < 768 * 1024 * 1024)); then
+					info \
+						"${AConfDisk[_DEVICE]} - ${RED}${cmsg_ERRO}${RST}" \
+						"\n${cprimeira} $(gettext "ficaria pequeno demais neste disco: ele começa depois da partição EFI (512 MiB).")" \
+						"$(gettext "Use pelo menos") ${RED}${nmin}%${RST} $(gettext "para") ${cprimeira}."
+					continue
+				fi
+			fi
+		fi
+
 		# tudo OK
 		#    if conf "${xtitle}" \
 		#             "\n${BOLD}${RED}$(gettext 'Deseja reviser o particionamento ?')" \
@@ -2257,6 +2305,10 @@ sh_mkparted() {
 	local cnextpart=''
 	local CSCRIPT=''
 	local _p
+	# FS do /boot para o Amntpoint/mkfs: o parted recebe "fat32", mas o
+	# mkfs correspondente é mkfs.vfat (não existe mkfs.fat32).
+	local cfsboot="${AsFs[boot]:-ext4}"
+	[[ "$cfsboot" == "fat32" ]] && cfsboot="vfat"
 
 	# Fecha qualquer LUKS/LVM remanescente de um teste anterior que ainda
 	# esteja ativo em cima de uma partição deste disco (ou deste LV, se o
@@ -2391,7 +2443,7 @@ sh_mkparted() {
 				((++cnextpart))
 				cnextpercent=$((AsDiskPercent[boot]))
 				CSCRIPT+="mkpart primary ${AsFs[boot]:-ext4} ${cini} ${cnextpercent}% name ${cnextpart} BOOT "
-				Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}${cnextpart}"]="/boot|${AsFs[boot]:-ext4}|1")
+				Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}${cnextpart}"]="/boot|${cfsboot}|1")
 				cini="${cnextpercent}%"
 			fi
 
@@ -2428,7 +2480,7 @@ sh_mkparted() {
 				((++cnextpart))
 				cnextpercent=$((AsDiskPercent[boot]))
 				CSCRIPT+="mkpart primary ${AsFs[boot]:-ext4} ${cini} ${cnextpercent}% "
-				Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}${cnextpart}"]="/boot|${AsFs[boot]:-ext4}|1")
+				Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}${cnextpart}"]="/boot|${cfsboot}|1")
 				cini="${cnextpercent}%"
 			fi
 
@@ -2445,7 +2497,7 @@ sh_mkparted() {
 			((++cnextpart))
 			cnextpercent=$((AsDiskPercent[boot] + AsDiskPercent[swap] + AsDiskPercent[root]))
 			CSCRIPT+="mkpart primary ${AsFs[root]:-ext4} ${cini} ${cnextpercent}% set ${cnextpart} boot on "
-			Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}$cnextpart"]="/|ext4|1")
+			Amntpoint+=(["${AConfDisk[_DEVICE]}${ext}$cnextpart"]="/|${AsFs[root]:-ext4}|1")
 			cini="${cnextpercent}%"
 
 			#home
@@ -2470,7 +2522,7 @@ sh_mkparted() {
 		evaluate_retval "${PIPESTATUS[0]}"
 		parted --align=opt --script "${AConfDisk[_DEVICE]}" -- print 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
 		sync 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
-		partprobe 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
+		partprobe "${AConfDisk[_DEVICE]}" 2>&1 | tee -i -a "$BOOTLOG" >$LOGGER
 
 		# Limpa qualquer assinatura antiga (LUKS, ext4, etc.) que possa ter
 		# ficado gravada na mesma região de disco de uma partição anterior,
@@ -2482,12 +2534,26 @@ sh_mkparted() {
 		Amkfs+=(["vfat"]="mkfs.vfat")
 		Amkfs+=(["swap"]="mkswap")
 		Amkfs+=(["ext4"]="mkfs.ext4")
+		# Os FS escolhidos no automático também precisam ter o mkfs conferido
+		# por sh_check_util_fs antes de formatar (antes só vfat, swap e ext4).
+		Amkfs+=(["${AsFs[root]:-ext4}"]="mkfs.${AsFs[root]:-ext4}")
+		$withboot && Amkfs+=(["$cfsboot"]="mkfs.$cfsboot")
+		$withhome && Amkfs+=(["${AsFs[home]:-ext4}"]="mkfs.${AsFs[home]:-ext4}")
 		LMKPARTED=true
 		LMKPARTED_DEVICE="${AConfDisk[_DEVICE]}"
+		# Guarda os pontos de montagem do automático (com os FS escolhidos) e a
+		# assinatura do disco recém-particionado. Enquanto o disco continuar
+		# igual, sh_rebuild_amntpoint_for_new_disk usa essa cópia em vez de
+		# deduzir: as partições novas ainda não têm FS e a dedução trocaria os
+		# FS por ext4, perderia o /boot e, no MBR, trocaria raiz e /home.
+		LMKPARTED_SIG="$(sh_disk_assinatura "${AConfDisk[_DEVICE]}")"
+		AmntpointAuto=()
+		for _p in "${!Amntpoint[@]}"; do
+			AmntpointAuto["$_p"]="${Amntpoint[$_p]}"
+		done
 		LFS=true
 		LPARTITION=true
 		LFSREVISED=true
-		# sh_check_disk_health "${AConfDisk[_DEVICE]}"
 	else
 		die "${cmsg_InstalacaoAbortada}..."
 	fi
@@ -2920,6 +2986,8 @@ sh_update_sudoers() {
 
 		unset user
 	fi
+	[[ -s "$dir_install/etc/sudoers.d/wheel" ]]
+	evaluate_retval "$?" "$err_not_fatal"
 }
 
 sh_make_fstab() {
@@ -3013,6 +3081,8 @@ sh_make_fstab() {
 		done
 		#		evaluate_retval "$?"
 	fi
+	[[ -s "$dir_install/etc/fstab" ]]
+	evaluate_retval "$?" "$err_not_fatal"
 
 	sh_chroot_job "${cmsg_Gerando} fstab pass2" "
     sed 's/#.*//' /etc/fstab | column --table --table-columns SOURCES,DIR,TYPE,OPTIONS,DUMP,PASS --table-hide - >/tmp/fstab
@@ -3029,7 +3099,10 @@ sh_activating_services() {
 	aServicesTTY+=(dbus sshd chronyd udevd uuidd dmeventd socklog-unix)
 	aServicesX+=()
 
-	if ! $LSERVER && ! $LONLY_TTY; then
+	# bluetoothd só onde há adaptador: o instalador roda no live da própria
+	# máquina, então o /sys daqui é o do destino. Sem adaptador (VM, desktop
+	# sem Bluetooth) o serviço só ocupa memória.
+	if ! $LSERVER && ! $LONLY_TTY && compgen -G '/sys/class/bluetooth/hci*' >/dev/null; then
 		aServicesX+=(bluetoothd)
 	fi
 
@@ -3038,6 +3111,8 @@ sh_activating_services() {
 		tty | server | xorg) continue ;;
 		*)
 			[[ "$_DISPLAYMANAGER" != "None" ]] && aServicesX+=("$_DISPLAYMANAGER")
+			# COSMIC: o cosmic-greeter precisa do daemon auxiliar junto do greetd
+			[[ "$x" = "cosmic" && "$_DISPLAYMANAGER" = "greetd" ]] && aServicesX+=(cosmic-greeter-daemon)
 			break
 			;;
 		esac
@@ -3062,6 +3137,17 @@ sh_activating_services() {
 				"$err_not_fatal" \
 				"$level"
 		done
+	fi
+
+	# Em local o runsvdir também traz o dhcpcd que ISOs antigas ativavam junto
+	# do NetworkManager (mkiso < 0.11.21). Os dois disputam as interfaces e o
+	# Wi-Fi falha mesmo com a senha certa. Fora do modo servidor quem cuida da
+	# rede é o NetworkManager, então o link herdado sai. O pacote fica.
+	if [[ "${AConfMirror[_SOURCE]}" = "local" ]] && ! $LSERVER; then
+		sh_chroot_job "$(gettext 'Desativando serviço') dhcpcd" \
+			"rm -f /etc/runit/runsvdir/current/dhcpcd" \
+			"$err_not_fatal" \
+			"$level"
 	fi
 
 	for service in "${aServicesTTY[@]}"; do
@@ -3123,6 +3209,55 @@ sh_configure_hyprland_audio() {
 		sed -i '/hl\.exec_cmd("pulseaudio --start")/s/^/--   /' "$cfile_skel"
 		;;
 	esac
+}
+
+# Enlightenment não executa o autostart XDG (~/.config/autostart): na
+# abertura da sessão só roda o que está no ~/.e/e/applications/startup/.order.
+# O voidbr-enlightenment-config já põe o PipeWire nele; aqui só ajusta para a
+# escolha. None deixa o padrão do pacote.
+#
+# O mixer do E (module.emix.cfg) também participa: com "no_autostart" 0 ele
+# roda "pulseaudio --start" ao abrir a sessão, antes do PipeWire subir, e o
+# PulseAudio fica com o socket (o pipewire-pulse não sobe). O pacote vem com 1;
+# na escolha PulseAudio vira 0, e é o próprio mixer que inicia o PulseAudio.
+sh_configure_enlightenment_audio() {
+	local cuser="${AsUser[cuser]}"
+	# o voidbr-pipewire-start encerra as sobras da sessão anterior (no runit
+	# elas não terminam no logout) e só então inicia o pipewire
+	local pw=/usr/share/voidbr-enlightenment/startup/voidbr-pipewire.desktop
+	local pw_old=/usr/share/applications/pipewire.desktop
+	local order no_autostart
+
+	sh_info_msg "${cmsg_Ajustando} Enlightenment (startup/.order)"
+	for order in "$dir_install/home/$cuser/.e/e/applications/startup/.order" \
+		"$dir_install/etc/skel/.e/e/applications/startup/.order"; do
+		[[ -f "$order" ]] || continue
+		case "${AConfAudio[_AUDIOSERVER]}" in
+		Pipewire)
+			sed -i "\\|^${pw_old}\$|d" "$order"
+			grep -qxF "$pw" "$order" || echo "$pw" >>"$order"
+			;;
+		Pulseaudio)
+			sed -i "\\|^${pw}\$|d; \\|^${pw_old}\$|d" "$order"
+			;;
+		esac
+	done
+
+	case "${AConfAudio[_AUDIOSERVER]}" in
+	Pipewire) no_autostart=1 ;;
+	Pulseaudio) no_autostart=0 ;;
+	*) return 0 ;;
+	esac
+	sh_chroot_job "${cmsg_Ajustando} Enlightenment (mixer)" "
+    for f in /home/$cuser/.e/e/config/voidbr/module.emix.cfg /etc/skel/.e/e/config/voidbr/module.emix.cfg; do
+      [ -f \"\$f\" ] || continue
+      eet -d \"\$f\" config > /tmp/module.emix.src || continue
+      sed -i 's/\"no_autostart\" int: [0-9]*;/\"no_autostart\" int: $no_autostart;/' /tmp/module.emix.src
+      eet -e \"\$f\" config /tmp/module.emix.src 1
+    done
+    rm -f /tmp/module.emix.src
+    chown $cuser:$cuser /home/$cuser/.e/e/config/voidbr/module.emix.cfg 2>/dev/null
+  " $err_not_fatal
 }
 
 sh_global_audio_cleaning() {
@@ -3208,7 +3343,7 @@ sh_activating_pulseaudio() {
     #AUTOSTART CORRETO (SÓ USUÁRIO)
     mkdir -p /home/$cuser/.config/autostart
     # ---- autostart do PulseAudio ----
-    cat > ~/.config/autostart/pulseaudio.desktop <<EOF
+    cat > /home/$cuser/.config/autostart/pulseaudio.desktop <<EOF
 [Desktop Entry]
 Type=Application
 Exec=pulseaudio --start
@@ -3498,6 +3633,15 @@ sh_umbriel_meta_package() {
 	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
 }
 
+sh_cosmic_meta_package() {
+	local DE='COSMIC Desktop'
+	local apkgs=(voidbr-cosmic)
+	apkgs+=(voidbr-base-config)
+	apkgs+=(voidbr-cosmic-config)
+
+	sh_install_pkgs_in_chroot "Instalando ${DE}" "${apkgs[*]}"
+}
+
 sh_sway_meta_package() {
 	local DE='SWAY Desktop'
 	local apkgs=(voidbr-sway)
@@ -3727,9 +3871,42 @@ sh_part_info() {
 	#	done < <(lsblk -fPAo TYPE,NAME,PATH,SIZE,TRAN,MODEL,LABEL,SERIAL,FSTYPE,PARTTYPENAME | grep -P 'TYPE="(part)"' | sort -k5,5 -k2,2)
 }
 
+# Simulação das telas da checagem de disco (testar sem disco com defeito,
+# inclusive em VM). Faz o smartctl responder como um disco com desgaste ou
+# defeito. Uso:
+#   sudo env VOID_INSTALL_SIMULA_DISCO=desgaste void-install
+#   sudo env VOID_INSTALL_SIMULA_DISCO=defeito  void-install
+_sh_smartctl_simulado() {
+	local r5=24 r197=0 r198=0
+	[[ "$VOID_INSTALL_SIMULA_DISCO" == "defeito" ]] && { r5=312; r197=48; r198=48; }
+	case "$*" in *-H*) echo "SMART overall-health self-assessment test result: PASSED" ;; esac
+	case "$*" in *-A*)
+		printf '  5 Reallocated_Sector_Ct   0x0033 100 100 010 Pre-fail Always - %s\n' "$r5"
+		printf '187 Reported_Uncorrect      0x0032 100 100 000 Old_age  Always - 0\n'
+		printf '197 Current_Pending_Sector  0x0012 100 100 000 Old_age  Always - %s\n' "$r197"
+		printf '198 Offline_Uncorrectable   0x0010 100 100 000 Old_age  Offline - %s\n' "$r198"
+		;;
+	esac
+}
+
+# Uso: sh_check_disk_health [disco] [auto]
+#   sem "auto" (menu "Saúde do disco"): mostra o relatório completo e
+#     retorna 0=ok, 1=aviso, 2=crítico.
+#   com "auto" (chamado ao escolher o disco de instalação): olha só o
+#     HARDWARE (SMART/dmesg) — disco novo sem tabela é normal antes de
+#     instalar. Saudável: segue em silêncio. Aviso: mostra o relatório e
+#     segue. Crítico: só segue se o usuário digitar SEI DO RISCO. Retorna
+#     0=pode usar o disco, 1=escolher outro.
 sh_check_disk_health() {
 	local disk="$1"
+	local lauto=false
 	local msg
+
+	[[ "$2" == "auto" ]] && lauto=true
+	if $lauto; then
+		# sem disco válido não há o que checar; a escolha segue normal
+		[[ -b "$disk" ]] || return 0
+	fi
 
 	AConfDisk[_HEALTH]="$disk"
 	[[ -b "$disk" ]] || {
@@ -3770,6 +3947,12 @@ sh_check_disk_health() {
 	size=$(lsblk -dn -o SIZE "$disk" 2>/dev/null | xargs)
 	tran=$(lsblk -dn -o TRAN "$disk" 2>/dev/null | xargs)
 	pttype=$(lsblk -dn -o PTTYPE "$disk" 2>/dev/null | xargs)
+
+	# simulação das telas de desgaste/defeito (VOID_INSTALL_SIMULA_DISCO)
+	if [[ -n "${VOID_INSTALL_SIMULA_DISCO:-}" ]]; then
+		smartctl() { _sh_smartctl_simulado "$@"; }
+		tran="sata"
+	fi
 
 	report+="Disco.............: ${CYAN}$disk${RESET}\n"
 	report+="Modelo............: ${CYAN}${model:-Desconhecido}${RESET}\n"
@@ -3987,7 +4170,9 @@ sh_check_disk_health() {
 			# degradação real mesmo com -H "PASSED" — um disco pode ter
 			# centenas de setores realocados e ainda "passar" no teste
 			# de saúde geral, que só falha perto do fim da vida útil.
-			local attr_id attr_name attr_raw attr_color
+			local attr_id attr_name attr_raw attr_color attr_out
+			# uma chamada só ao smartctl; os 4 atributos saem dessa saída
+			attr_out=$(smartctl -A $smart_dtype "$disk" 2>/dev/null)
 			for attr_id in 5 187 197 198; do
 				case "$attr_id" in
 				5) attr_name="Setores realocados......" ;;
@@ -3995,11 +4180,21 @@ sh_check_disk_health() {
 				197) attr_name="Setores pendentes........" ;;
 				198) attr_name="Setores incorrig. offline" ;;
 				esac
-				attr_raw=$(smartctl -A $smart_dtype "$disk" 2>/dev/null | awk -v id="$attr_id" '$1==id {print $NF}')
+				attr_raw=$(awk -v id="$attr_id" '$1==id {print $NF}' <<<"$attr_out")
 				[[ -z "$attr_raw" ]] && continue
 				if [[ "$attr_raw" != "0" ]]; then
-					attr_color="${YELLOW}"
-					((st_hardware < 1)) && st_hardware=1
+					# setores pendentes/incorrigíveis = perda de dados já
+					# acontecendo; realocados só viram crítico em grande
+					# quantidade (o disco ainda está trocando setores)
+					if [[ "$attr_raw" =~ ^[0-9]+$ ]] &&
+						{ [[ "$attr_id" == 197 || "$attr_id" == 198 ]] ||
+							{ [[ "$attr_id" == 5 ]] && ((attr_raw >= 100)); }; }; then
+						attr_color="${RED}"
+						st_hardware=2
+					else
+						attr_color="${YELLOW}"
+						((st_hardware < 1)) && st_hardware=1
+					fi
 				else
 					attr_color="${GREEN}"
 				fi
@@ -4045,6 +4240,36 @@ sh_check_disk_health() {
 	2) report+="${RED}HARDWARE.: POSSÍVEIS DEFEITOS${RESET}" ;;
 	esac
 
+	if $lauto; then
+		AConfDisk[_HEALTH_STATE]="$st_hardware"
+		AConfDisk[_HEALTH_REPORT]="$report"
+		case "$st_hardware" in
+		0) return 0 ;;
+		1)
+			${DIALOG} \
+				--colors \
+				--scrollbar \
+				--backtitle "$ccabec" \
+				--title "$(gettext 'Disco com sinais de desgaste')" \
+				--msgbox "${report}\n\n${YELLOW}$(gettext 'O disco ainda funciona, mas faça backup com frequência.')${RESET}" \
+				00 00
+			return 0
+			;;
+		2)
+			local resp
+			resp=$(${DIALOG} \
+				--colors \
+				--scrollbar \
+				--backtitle "$ccabec" \
+				--title "$(gettext 'DISCO COM DEFEITO')" \
+				--inputbox "${report}\n\n${BOLD}${RED}$(gettext 'Este disco está falhando. Instalar nele vai causar erros, travamentos e perda de dados.')${RESET}\n${CYAN}$(gettext 'Isso é defeito do disco, não do VoidBR. Troque o disco.')${RESET}\n\n$(gettext 'Para instalar mesmo assim, digite') ${BOLD}SEI DO RISCO${RESET}:" \
+				00 00 "" 2>&1 >/dev/tty)
+			[[ "$resp" == "SEI DO RISCO" ]] && return 0
+			return 1
+			;;
+		esac
+	fi
+
 	${DIALOG} \
 		--colors \
 		--scrollbar \
@@ -4054,6 +4279,23 @@ sh_check_disk_health() {
 		00 00
 
 	return "$final_status"
+}
+
+# Grava no sistema instalado que o disco já tinha defeito ou desgaste quando
+# foi instalado (só quando houve aviso na checagem automática).
+sh_write_disk_health_log() {
+	local state="${AConfDisk[_HEALTH_STATE]:-0}"
+	local log="${dir_install}/var/log/voidbr-disco.log"
+
+	((state > 0)) || return 0
+	mkdir -p "${dir_install}/var/log"
+	{
+		echo "$(date '+%F %T') void-install: disco ${AConfDisk[_DEVICE]} instalado com estado de hardware $state (1=desgaste, 2=defeito)"
+		((state == 2)) && echo "o usuário foi avisado e confirmou com SEI DO RISCO"
+		echo
+		# relatório sem os códigos de cor do dialog
+		echo -e "${AConfDisk[_HEALTH_REPORT]}" | sed 's/\\Z[0-9bBuUrRn]//g'
+	} >>"$log"
 }
 
 set_custom_install() {
@@ -4363,6 +4605,7 @@ sh_choose_kernel() {
 	fi
 
 	array+=("linux" "Linux kernel and modules current default" "$([[ $current_kernel == linux ]] && echo on || echo off)")
+	array+=("linux7.3" "Linux kernel and modules (7.3 series) stable" "$([[ $current_kernel == linux7.3 ]] && echo on || echo off)")
 	array+=("linux7.2" "Linux kernel and modules (7.2 series) stable" "$([[ $current_kernel == linux7.2 ]] && echo on || echo off)")
 	array+=("linux7.1" "Linux kernel and modules (7.1 series) stable" "$([[ $current_kernel == linux7.1 ]] && echo on || echo off)")
 	array+=("linux7.0" "Linux kernel and modules (7.0 series) stable" "$([[ $current_kernel == linux7.0 ]] && echo on || echo off)")
@@ -4878,27 +5121,24 @@ sh_testcommand() {
 
 sh_execUtilDisk() {
 	local exit_status
+	local cmodo
+
+	sh_getBootEFI && cmodo="UEFI" || cmodo="BIOS"
+
 	${DIALOG} \
-		--title "Modify Partition Table on ${AConfDisk[_DEVICE]}" \
+		--title "$(gettext 'Layout exigido') - ${AConfDisk[_DEVICE]}" \
 		--colors \
 		--msgbox "\n
-${BOLD}${software} $(gettext "será executado no disco") ${AConfDisk[_DEVICE]}.${RESET}\n\n
-$(gettext "Para sistemas BIOS, ")\
-$(gettext "tabelas de partições MBR (dos) ou GPT são suportadas.")\n
-$(gettext "Para usar o GPT em sistemas de BIOS de PC, ")
-$(gettext "uma partição vazia de 1 MB deve ser adicionada")\n
-$(gettext "nos primeiros 2 GB do disco com flag bios_grub ativada.")\n
-${BOLD}$(gettext "NOTA: você não precisa disso em sistemas UEFI.")${RESET}\n\n
-$(gettext "Para sistemas UEFI, GPT é obrigatório, e uma partição FAT32 com pelo menos")\n
-$(gettext "100MB deve ser criado com a flag boot,")
-$(gettext "este será usado como")\n
-$(gettext "Partição do sistema UEFI.")\
-$(gettext "Esta partição deve ter um ponto de montagem como") '/boot/efi'\n\n
-$(gettext "Pelo menos 1 partição é necessária para rootfs") '(/)'.\n
-$(gettext "Para o swap,") $(gettext "Uma RAM*2 deve ser realmente suficiente.")\
-$(gettext "Para o / minímo de 600 MB são necessários.")\n\n
-${BOLD}$(gettext "AVISO: /usr não é suportado como uma partição separada.")${RESET}\n
-${RESET}\n" 18 80
+${BOLD}${software} $(gettext "será executado no disco") ${AConfDisk[_DEVICE]}.${RESET}\n
+$(gettext "Sistema iniciado em modo:") ${BOLD}${YELLOW}${cmodo}${RESET}\n\n
+${BOLD}${CYAN}$(gettext "Crie as partições NESTA ORDEM (tabela GPT):")${RESET}\n\n
+ ${BOLD}1${RESET}  BIOS boot    2 MiB    $(gettext "tipo") ${CYAN}BIOS boot${RESET} $(gettext "(sem formatar)")\n
+ ${BOLD}2${RESET}  EFI System   512 MiB  $(gettext "tipo") ${CYAN}EFI System${RESET}  -> vfat  /boot/efi\n
+ ${BOLD}3+${RESET} /boot, swap, /home     ${YELLOW}$(gettext "(opcionais)")${RESET}\n
+ ${BOLD}..${RESET} $(gettext "raiz")          ${RED}$(gettext "obrigatória")${RESET}  -> ext4/xfs/btrfs/f2fs/jfs  /\n\n
+$(gettext "Esse é o mesmo layout do particionamento automático e funciona em BIOS e UEFI.")\n
+$(gettext "Tabela MBR (dos) só é aceita em modo BIOS, sem as partições 1 e 2.")\n\n
+${BOLD}${RED}$(gettext "AVISO:")${RESET} $(gettext "/usr não é suportado como partição separada.")\n" 20 80
 	exit_status=$?
 	if [ $exit_status -eq 0 ]; then
 		while true; do
@@ -4911,6 +5151,35 @@ ${RESET}\n" 18 80
 		return 1
 	fi
 	sh_disk_part_info
+	return 0
+}
+
+# Particionamento automático. Era o bloco "automatic" de sh_menuUtilDisk;
+# virou função para também ser chamado direto do FileSystem, quando o layout
+# feito pelo usuário não está pronto para a instalação.
+sh_auto_partition() {
+	if sh_chooseTablePartition; then
+		LMKPARTED=false
+		oldgrafico=$grafico
+		grafico=1
+		sh_mkparted
+		grafico=$oldgrafico
+		sh_disk_part_info
+
+		# $LFDE/$LVM já foram decididos dentro de sh_getPartitionsPercent
+		# (chamada por sh_mkparted, via sh_ask_partition_mode). Se o usuário
+		# optou por LUKS ou LVM, encadeia direto na configuração de VG/LVs
+		# (senha também, se for LUKS), sem precisar que ele ache o menu
+		# "Fde"/"Lvm" manualmente depois.
+		if $LFDE; then
+			menu="Fde"
+			sh_confLvm
+		elif $LVM; then
+			menu="Lvm"
+			sh_confLvm
+		fi
+	fi
+	LAUTO=true
 	return 0
 }
 
@@ -4966,28 +5235,7 @@ ${BOLD}MODEL   : ${RESET}${RED}${MODEL_ORIGEM}${RESET}\n" \
 
 	case "$software" in
 	"automatic")
-		if sh_chooseTablePartition; then
-			LMKPARTED=false
-			oldgrafico=$grafico
-			grafico=1
-			sh_mkparted
-			grafico=$oldgrafico
-			sh_disk_part_info
-
-			# $LFDE/$LVM já foram decididos dentro de sh_getPartitionsPercent
-			# (chamada por sh_mkparted, via sh_ask_partition_mode). Se o usuário
-			# optou por LUKS ou LVM, encadeia direto na configuração de VG/LVs
-			# (senha também, se for LUKS), sem precisar que ele ache o menu
-			# "Fde"/"Lvm" manualmente depois.
-			if $LFDE; then
-				menu="Fde"
-				sh_confLvm
-			elif $LVM; then
-				menu="Lvm"
-				sh_confLvm
-			fi
-		fi
-		LAUTO=true
+		sh_auto_partition
 		return 0
 		;;
 	esac
@@ -5027,6 +5275,9 @@ sh_getNvme() {
 		case "$name" in
 		zram*) echo 'p' ;;
 		nbd*) echo 'p' ;;
+		# Regra do kernel: nome terminado em dígito leva 'p' antes do número
+		# da partição (mmcblk0p1, md0p1); senão, não (sda1, vda1).
+		*[0-9]) echo 'p' ;;
 		*) echo '' ;;
 		esac
 		;;
@@ -5150,6 +5401,13 @@ $(printf "%${nlen}s$sep%-4s$sep%-6s$sep%6s$sep%-6s$sep%-15s$sep%-30s" "DEVICE" "
 				return 0
 			fi
 
+			# checagem automática do hardware do disco (SMART/dmesg): em
+			# silêncio se saudável; com defeito, só segue com confirmação
+			if [[ "$exit_status" == "$D_OK" || "$exit_status" == "$D_CONFIG" ]] &&
+				! sh_check_disk_health "$sd" auto; then
+				continue
+			fi
+
 			AConfDisk[_DEVICE]="$sd"
 			AConfDisk[_BOOTLOADER]="$sd"
 			AConfDisk[_HEALTH]="$sd"
@@ -5202,6 +5460,17 @@ $(printf "%${nlen}s$sep%-4s$sep%-6s$sep%6s$sep%-6s$sep%-15s$sep%-30s" "DEVICE" "
 					return 0         # qui 07 mai 2026 21:22:11 -04
 				fi
 
+			# Disco já tem partições e não foi particionado pelo automático nesta
+			# sessão: mostra o que existe e pergunta se usa ou particiona agora.
+			# Também não pergunta se ele já respondeu "Usar" para este disco e o
+			# disco não mudou desde então (vale entre execuções, via conf).
+			elif [[ "$LMKPARTED_DEVICE" != "$sd" ]] &&
+				! [[ "$LUSAR_DEVICE" == "$sd" && "$LUSAR_SIG" == "$(sh_disk_assinatura "$sd")" ]] &&
+				sh_disco_com_particoes "$sd"; then
+				sh_checkdisk "${AConfDisk[_DEVICE]}"
+				sh_menuUtilDisk
+				set_disk_choosed
+				return 0
 			fi
 			return 0
 			;;
@@ -5549,7 +5818,7 @@ ${orange}     ${APP} ${reset}[-i|c|f|g|q|V|n|h]
 ${orange}     ${APP} ${reset}[--install|--chroot|--file|--grafico|--quiet|--version|--nocolor|--help]
 
 [<operations>] ${reset}
-   ${red}-i  --install${cyan}       # ${cmsg_Usage1}
+   ${red}-i  --install${cyan}       # ${cmsg_Usage1} (default)
    ${red}-c  --chroot${cyan}        # ${cmsg_Usage2}
    ${red}-f  --file${cyan}          # ${cmsg_Usage8} (default: $app_conf)
    ${red}-g  --grafico${cyan}       # ${cmsg_Usage3}
@@ -5557,6 +5826,11 @@ ${orange}     ${APP} ${reset}[--install|--chroot|--file|--grafico|--quiet|--vers
    ${red}-V  --version${cyan}       # ${cmsg_Usage5}
    ${red}-n  --nocolor${cyan}       # ${cmsg_Usage6}
    ${red}-h  --help${cyan}          # ${cmsg_Usage7}${reset}
+
+[$(gettext "variáveis de ambiente")] ${reset}
+   ${red}VOID_INSTALL_SIMULA_DISCO=desgaste${cyan}   # $(gettext "simula disco com desgaste na checagem de saúde")
+   ${red}VOID_INSTALL_SIMULA_DISCO=defeito${cyan}    # $(gettext "simula disco com defeito (pede SEI DO RISCO)")${reset}
+   ${orange}sudo env VOID_INSTALL_SIMULA_DISCO=defeito ${APP}${reset}
 EOF
 }
 
@@ -5639,6 +5913,7 @@ sh_choose_wm() {
 	aWm[xorg]="Xorg $(gettext "Minimal")"
 	aWm[bspwm]="Bspwm"
 	aWm[cinnamon]="Cinnamon"
+	aWm[cosmic]="COSMIC"
 	aWm[enlightenment]="Enlightenment"
 	aWm[gnome]="Gnome"
 	aWm[plasma]="Kde Plasma"
@@ -5675,6 +5950,7 @@ sh_choose_wm() {
 		xorg "${aWm[xorg]}" "${aFlag[xorg]}" \
 		bspwm "${aWm[bspwm]}" "${aFlag[bspwm]}" \
 		cinnamon "${aWm[cinnamon]}" "${aFlag[cinnamon]}" \
+		cosmic "${aWm[cosmic]}" "${aFlag[cosmic]}" \
 		enlightenment "${aWm[enlightenment]}" "${aFlag[enlightenment]}" \
 		fluxbox "${aWm[fluxbox]}" "${aFlag[fluxbox]}" \
 		gnome "${aWm[gnome]}" "${aFlag[gnome]}" \
@@ -5707,6 +5983,7 @@ sh_choose_wm() {
 	# pra dar resultado errado dependendo da ordem de iteração).
 	LSWAY=false
 	LUMBRIEL=false
+	LCOSMIC=false
 	LMANGO=false
 	LHYPRLAND=false
 	LRIVER=false
@@ -5731,6 +6008,11 @@ sh_choose_wm() {
 		umbriel)
 			_DISPLAYMANAGER="greetd"
 			LUMBRIEL=true
+			LMETA=true
+			;;
+		cosmic)
+			_DISPLAYMANAGER="greetd"
+			LCOSMIC=true
 			LMETA=true
 			;;
 		sway)
@@ -5827,13 +6109,7 @@ sh_choose_wm() {
 	LDM=true
 	LDHCP=false
 
-	if $LSERVER; then
-		if conf "=== IP SERVER ===" \
-			"\n${BOLD}${WHITE}$(gettext "Uma instalação SERVIDOR foi escolhida")\n" \
-			"\n${BOLD}${RED}$(gettext "Deseja configurar IP fixo?")\n\n"; then
-			sh_configure_dhcpcd_static_ip_dialog
-		fi
-	fi
+	sh_configure_network
 
 	#  debug "${_DISPLAYMANAGER[@]}" "\n${_WINDOWMANAGER[@]}" "\nLONLY_TTY=$LONLY_TTY" "\nLXORG=$LXORG"
 
@@ -6023,7 +6299,7 @@ sh_choose_custom_packages() {
 		[[ -n "${aCustom[$x]}" ]] && aSel[$x]='on'
 	done
 
-	escolha="${aTopicos[0]}"
+	escolha="$cConcluir"
 	while true; do
 		# 1ª tela: menu de tópicos, com a contagem de marcados em cada um
 		menu_items=()
@@ -6113,6 +6389,135 @@ sh_choose_custom_packages() {
 	done
 }
 
+# lista só as placas físicas (ignora lo, bridge, veth, tun, docker...)
+sh_get_net_ifaces() {
+	local d
+
+	for d in /sys/class/net/*; do
+		[[ -e "$d/device" ]] || continue
+		printf '%s\n' "${d##*/}"
+	done
+}
+
+# sh_get_iface_info <iface> => "<eth|wifi> <mac> <estado> <driver>"
+sh_get_iface_info() {
+	local d="/sys/class/net/$1"
+	local tipo='eth' mac state drv
+
+	[[ -d "$d/wireless" ]] && tipo='wifi'
+	mac=$(<"$d/address")
+	state=$(<"$d/operstate")
+	drv=$(basename "$(readlink -f "$d/device/driver")" 2>/dev/null)
+	printf '%s %s %s %s' "$tipo" "$mac" "$state" "${drv:-?}"
+}
+
+sh_configure_network() {
+	local -a aIfaces menu_items
+	local iface mode tipo mac state drv
+	local ctitle="=== $(gettext 'REDE') ==="
+
+	if $LSERVER; then
+		ctitle="=== IP SERVER ==="
+		mapfile -t aIfaces < <(sh_get_net_ifaces)
+	else
+		# fora do Server quem cuida da rede é o NetworkManager; wifi fica de
+		# fora porque IP fixo no wifi depende da rede (SSID) escolhida
+		for iface in $(sh_get_net_ifaces); do
+			[[ -d "/sys/class/net/$iface/wireless" ]] || aIfaces+=("$iface")
+		done
+		# sem placa cabeada não há o que configurar aqui
+		((${#aIfaces[@]})) || return 0
+	fi
+	sh_setAsDhcp
+
+	while true; do
+		# 1) placas detectadas
+		if ((${#aIfaces[@]})); then
+			menu_items=()
+			for iface in "${aIfaces[@]}"; do
+				read -r tipo mac state drv <<<"$(sh_get_iface_info "$iface")"
+				menu_items+=("$iface" "$(printf '%-4s %s %-5s %s' "$tipo" "$mac" "$state" "$drv")")
+			done
+
+			iface=$(dialog \
+				--backtitle "$ccabec" \
+				--title "$ctitle" \
+				--colors \
+				--default-item "${AsDhcp[IFACE]}" \
+				--menu "\n$(gettext 'Placas de rede detectadas'): ${YELLOW}${#aIfaces[@]}${RST}\n$(gettext 'Escolha a placa a configurar'):\n${RED}$(gettext 'Se cancelar, a rede fica em DHCP (automático).')${RST}" \
+				$((${#aIfaces[@]} + 11)) 76 ${#aIfaces[@]} "${menu_items[@]}" \
+				2>&1 >/dev/tty) || return 0
+			AsDhcp[IFACE]="$iface"
+		fi
+
+		while true; do
+			# 2) dhcp ou ip fixo
+			mode=$(dialog \
+				--backtitle "$ccabec" \
+				--title "=== ${AsDhcp[IFACE]} ===" \
+				--default-item "$($LDHCP && echo static || echo dhcp)" \
+				--menu "\n$(gettext 'Como configurar a placa') ${AsDhcp[IFACE]}?" \
+				11 50 2 \
+				dhcp "$(gettext 'Automático (DHCP)')" \
+				static "$(gettext 'IP fixo')" \
+				2>&1 >/dev/tty) || break
+
+			# 3) dhcp segue adiante
+			if [[ "$mode" == dhcp ]]; then
+				LDHCP=false
+				return 0
+			fi
+
+			# ip fixo abre o formulário; cancelado volta para dhcp/ip fixo
+			LDHCP=false
+			sh_configure_dhcpcd_static_ip_dialog
+			$LDHCP && return 0
+		done
+
+		# cancelou dhcp/ip fixo: volta para a lista de placas
+		((${#aIfaces[@]})) || return 0
+	done
+}
+
+# sh_valid_ipv4 <ip> => 0 se for um IPv4 válido (4 números de 0 a 255)
+# zero à esquerda é recusado: alguns programas leem 010 como octal (8)
+sh_valid_ipv4() {
+	local ip="$1" n
+	local -a aOct
+
+	[[ "$ip" =~ ^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}$ ]] || return 1
+	IFS='.' read -r -a aOct <<<"$ip"
+	for n in "${aOct[@]}"; do
+		((n <= 255)) || return 1
+	done
+	return 0
+}
+
+# sh_check_static_ip => valida AsDhcp; em erro avisa e retorna 1
+sh_check_static_ip() {
+	local cerro=""
+
+	if [[ -z "${AsDhcp[IFACE]}" ]]; then
+		cerro="$(gettext 'Interface não informada')"
+	elif [[ -n "$(sh_get_net_ifaces)" && ! -e "/sys/class/net/${AsDhcp[IFACE]}" ]]; then
+		cerro="$(gettext 'Interface inexistente'): ${AsDhcp[IFACE]}"
+	elif ! sh_valid_ipv4 "${AsDhcp[IP]}"; then
+		cerro="$(gettext 'IP inválido'): ${AsDhcp[IP]}"
+	elif [[ ! "${AsDhcp[CIDR]}" =~ ^([1-9]|[12][0-9]|3[0-2])$ ]]; then
+		cerro="$(gettext 'Máscara (CIDR) inválida, use de 1 a 32'): ${AsDhcp[CIDR]}"
+	elif [[ -n "${AsDhcp[GATEWAY]}" ]] && ! sh_valid_ipv4 "${AsDhcp[GATEWAY]}"; then
+		cerro="$(gettext 'Gateway inválido'): ${AsDhcp[GATEWAY]}"
+	elif [[ -n "${AsDhcp[DNS1]}" ]] && ! sh_valid_ipv4 "${AsDhcp[DNS1]}"; then
+		cerro="$(gettext 'DNS 1 inválido'): ${AsDhcp[DNS1]}"
+	elif [[ -n "${AsDhcp[DNS2]}" ]] && ! sh_valid_ipv4 "${AsDhcp[DNS2]}"; then
+		cerro="$(gettext 'DNS 2 inválido'): ${AsDhcp[DNS2]}"
+	fi
+
+	[[ -z "$cerro" ]] && return 0
+	alerta "=== $(gettext 'IP fixo') ===" "${RED}${cerro}${RST}"
+	return 1
+}
+
 sh_configure_dhcpcd_static_ip_dialog() {
 	local CONFIG_FILE="/etc/dhcpcd.conf"
 	local DEFAULT_IFACE
@@ -6127,7 +6532,7 @@ sh_configure_dhcpcd_static_ip_dialog() {
 	while true; do
 		dhcptext=$(dialog \
 			--backtitle "$ccabec" \
-			--title "$(gettext "Configuração de IP fixo (dhcpcd)")" \
+			--title "$(gettext "Configuração de IP fixo") ($($LSERVER && echo dhcpcd || echo NetworkManager))" \
 			--form "$(gettext "Preencha os dados:")" \
 			15 60 6 \
 			"Interface      : " 1 1 "${AsDhcp[IFACE]}" 1 $ncol 20 0 \
@@ -6152,6 +6557,9 @@ sh_configure_dhcpcd_static_ip_dialog() {
 			AsDhcp[GATEWAY]="${adhcp[3]}"
 			AsDhcp[DNS1]="${adhcp[4]}"
 			AsDhcp[DNS2]="${adhcp[5]}"
+
+			# dado inválido: avisa e reabre o formulário com o que foi digitado
+			sh_check_static_ip || continue
 
 			# mensagem confirmação
 			CONFIRM_MSG="$(printf "%s\n\n%-20s: %s\n%-20s: %s/%s\n%-20s: %s\n%-20s: %s %s" \
@@ -6187,9 +6595,43 @@ COMMIT
 EOF
 }
 
+sh_build_and_apply_nm_config() {
+	local cdir="$dir_install/etc/NetworkManager/system-connections"
+	local CONFIG_FILE="$cdir/${AsDhcp[IFACE]}.nmconnection"
+
+	sh_info_msg "$(gettext 'Aplicando configuração do NetworkManager')"
+	mkdir -p "$cdir"
+
+	{
+		printf '[connection]\n'
+		printf 'id=%s\n' "${AsDhcp[IFACE]}"
+		printf 'type=ethernet\n'
+		printf 'interface-name=%s\n' "${AsDhcp[IFACE]}"
+		printf 'autoconnect=true\n'
+		printf '\n[ethernet]\n'
+		printf '\n[ipv4]\n'
+		printf 'method=manual\n'
+		printf 'address1=%s/%s\n' "${AsDhcp[IP]}" "${AsDhcp[CIDR]}"
+		[[ -n "${AsDhcp[GATEWAY]}" ]] && printf 'gateway=%s\n' "${AsDhcp[GATEWAY]}"
+		if [[ -n "${AsDhcp[DNS1]}${AsDhcp[DNS2]}" ]]; then
+			printf 'dns='
+			[[ -n "${AsDhcp[DNS1]}" ]] && printf '%s;' "${AsDhcp[DNS1]}"
+			[[ -n "${AsDhcp[DNS2]}" ]] && printf '%s;' "${AsDhcp[DNS2]}"
+			printf '\n'
+		fi
+		printf '\n[ipv6]\n'
+		printf 'method=auto\n'
+	} >"$CONFIG_FILE"
+
+	# o NetworkManager ignora o arquivo se outro usuário puder ler/gravar
+	chown root:root "$CONFIG_FILE"
+	chmod 600 "$CONFIG_FILE"
+}
+
 sh_build_and_apply_dhcpcd_config() {
 	local CONFIG_FILE="$dir_install/etc/dhcpcd.conf"
 	local BACKUP_FILE="${CONFIG_FILE}.$(sh_diahora)"
+	local dns
 
 	sh_info_msg "%(gettext 'Aplicando configuração do dhcpd')"
 	# backup somente se existir
@@ -6197,16 +6639,22 @@ sh_build_and_apply_dhcpcd_config() {
 		mv -f "$CONFIG_FILE" "$BACKUP_FILE"
 	fi
 
-	# cria novo arquivo
-	cat >"$CONFIG_FILE" <<EOF
-# See dhcpcd.conf(5) for details.
-
-interface ${AsDhcp[IFACE]}
-static ip_address=${AsDhcp[IP]}/${AsDhcp[CIDR]}
-static routers=${AsDhcp[GATEWAY]}
-static domain_name_servers=${AsDhcp[DNS1]} ${AsDhcp[DNS2]}
-EOF
-
+	# parte do dhcpcd.conf original e acrescenta o bloco da interface
+	{
+		if [[ -f "$BACKUP_FILE" ]]; then
+			cat "$BACKUP_FILE"
+		else
+			printf '# See dhcpcd.conf(5) for details.\n'
+		fi
+		printf '\n# void-install: IP fixo\n'
+		printf 'interface %s\n' "${AsDhcp[IFACE]}"
+		printf 'static ip_address=%s/%s\n' "${AsDhcp[IP]}" "${AsDhcp[CIDR]}"
+		[[ -n "${AsDhcp[GATEWAY]}" ]] && printf 'static routers=%s\n' "${AsDhcp[GATEWAY]}"
+		dns="${AsDhcp[DNS1]} ${AsDhcp[DNS2]}"
+		dns="${dns# }"
+		dns="${dns% }"
+		[[ -n "$dns" ]] && printf 'static domain_name_servers=%s\n' "$dns"
+	} >"$CONFIG_FILE"
 }
 
 sh_choose_dm() {
@@ -6263,7 +6711,7 @@ sh_choose_dm() {
 	LDM=true
 	_DISPLAYMANAGER="$dm"
 
-	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER | $LGNOME; then
+	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER || $LGNOME; then
 		if [[ "$dm" != "None" && "$dm" != "sddm" ]]; then
 			if conf "=== ${cmsg_Dm^^} ===" \
 				"\n${BOLD}${CYAN}$(gettext "É aconselhável escolhar sddm para compatibilidade")" \
@@ -6273,7 +6721,7 @@ sh_choose_dm() {
 		fi
 	fi
 
-	if $LUMBRIEL; then
+	if $LUMBRIEL || $LCOSMIC; then
 		if [[ "$dm" != "None" && "$dm" != "greetd" ]]; then
 			if conf "=== ${cmsg_Dm^^} ===" \
 				"\n${BOLD}${CYAN}$(gettext "É aconselhável escolhar greetd para compatibilidade")" \
@@ -6484,13 +6932,16 @@ sh_checkInstall() {
 		alerta "${cmsg_BootLoader^^}" "${RED}✗ ${cmsg_LimineNaoSuportaMbr}"
 		DEFITEM="${cmsg_BootLoader}"
 		return 1
+	elif [[ "${AConfBootLoader[_LOADER]}" == "limine" ]] && $LEFI && ! sh_check_esp_limine; then
+		DEFITEM="${cmsg_BootLoader}"
+		return 1
 	elif ! $LKEYMAP; then
 		alerta "${cmsg_Teclado^^}" "${RED}✗ ${cmsg_NotConfTeclado}"
-		DEFITEM="${cmsg_Teclado}"
+		DEFITEM="Regional"
 		return 1
 	elif ! $LTIMEZONE; then
 		alerta "TIMEZONE" "${RED}✗ ${cmsg_NotConfTimezone}"
-		DEFITEM="Timezone"
+		DEFITEM="Regional"
 		return 1
 	elif ! $LWM; then
 		alerta "WM" "${RED}✗ ${cmsg_NotConfWm}"
@@ -6582,7 +7033,10 @@ sh_set_edition_os_release() {
 	local f="${dir_install}/etc/os-release"
 
 	sh_info_msg "${cmsg_Ajustando} $f"
-	[[ -f "$f" ]] || return 1
+	[[ -f "$f" ]] || {
+		evaluate_retval 1 "$err_not_fatal"
+		return 1
+	}
 	name="${name^}"
 	if grep -q '^EDITION=' "$f"; then
 		sed -i "s/^EDITION=.*/EDITION=\"$name\"/" "$f"
@@ -6590,6 +7044,8 @@ sh_set_edition_os_release() {
 		[[ -s "$f" ]] && [[ -n "$(tail -c1 "$f")" ]] && echo >>"$f"
 		echo "EDITION=\"$name\"" >>"$f"
 	fi
+	grep -q "^EDITION=\"$name\"" "$f"
+	evaluate_retval "$?" "$err_not_fatal"
 }
 
 # Nome CRU da edição. Alimenta o SESSION_NAME do DM, por isso não normaliza
@@ -6784,7 +7240,7 @@ sh_limineInstall() {
 
 	if $LBIOS; then
 		sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') i386-pc" "
-      limine bios-install ${AConfDisk[_BOOTLOADER]} 1 --force
+      limine bios-install ${AConfDisk[_BOOTLOADER]} ${_PART_BIOS_NUM} --force
 	   "
 	fi
 
@@ -6804,10 +7260,16 @@ sh_limineInstall() {
     "
 
 		if ! sh_is_running_hypervisor; then
-			sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
-        efibootmgr -c \
+			# Número real da ESP (em layout feito fora do instalador ela pode não
+			# ser a partição 2). Sem _PART_BOOT, mantém o 2 do layout automático.
+			local esp_num
+			esp_num="$(cat "/sys/class/block/$(basename "$(readlink -f "$_PART_BOOT")")/partition" 2>/dev/null)"
+			[[ -n "$esp_num" ]] || esp_num="$(grep -o '[0-9]*$' <<<"$_PART_BOOT")"
+			esp_num="${esp_num:-2}"
+			sh_chroot_job "$(gettext 'Registrando Limine no firmware (NVRAM)')" "
+        efibootmgr -q -c \
           -d ${AConfDisk[_BOOTLOADER]} \
-          -p 2 \
+          -p ${esp_num} \
           -L 'Limine' \
           -l '\EFI\limine\BOOTX64.EFI'
     	"
@@ -6834,9 +7296,16 @@ sh_limineInstall() {
 
 	sh_change_limine
 
-	sh_chroot_job "${cmsg_Instalando} Limine $(gettext 'para a plataforma') x86_64-efi" "
-    update-limine || true
-  "
+	# Na instalação pela rede o kernel só é configurado (initramfs gerado) no
+	# xbps-reconfigure do fim, cujo hook 90-limine já roda o update-limine.
+	# Rodar agora, sem initramfs, só gerava o erro enganoso "sem espaço
+	# suficiente em /boot/efi/limine". Roda aqui só se o initramfs já existe
+	# (instalação local, ou LUKS/LVM, que regenera o initramfs acima).
+	if compgen -G "$dir_install/boot/initramfs-*.img" >/dev/null; then
+		sh_chroot_job "$(gettext 'Gerando configuração do Limine')" "
+      update-limine || true
+    "
+	fi
 
 }
 
@@ -7020,6 +7489,7 @@ sh_get_session_name() {
 	local -A aSession=(
 		[bspwm]=bspwm
 		[cinnamon]=cinnamon
+		[cosmic]=cosmic
 		[enlightenment]=enlightenment
 		[fluxbox]=fluxbox
 		[gnome]=gnome
@@ -7127,7 +7597,7 @@ User=$user
 Session=$session
 EOF
 
-	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER | $LGNOME | $LUMBRIEL; then
+	if $LHYPRLAND || $LSWAY || $LMANGO || $LRIVER || $LGNOME || $LUMBRIEL || $LCOSMIC; then
 		sed -i '/^\[General\]/,/^\[/{
     /^\[/!b
     /^\[General\]/!i\
@@ -7210,11 +7680,28 @@ sh_fix_gnome_wayland_session() {
 sh_update_greetd_conf() {
 	local cuser="${AsUser[cuser]}"
 	local cfile="$dir_install/etc/greetd/config.toml"
+	local SESSION_NAME
+	local exec_cmd
 
 	sh_info_msg "Customizando Greetd $cfile"
 	mkdir -p "$dir_install/etc/greetd/"
 
-	cat >"$cfile" <<EOF
+	# COSMIC: tela do cosmic-greeter (vale também na instalação local da ISO
+	# COSMIC, em que LCOSMIC não é marcado no menu)
+	if $LCOSMIC || [[ -x "$dir_install/usr/bin/cosmic-greeter-start" ]]; then
+		cat >"$cfile" <<EOF
+[terminal]
+vt = 7
+
+[general]
+source_profile = false
+
+[default_session]
+command = "cosmic-greeter-start"
+user = "cosmic-greeter"
+EOF
+	else
+		cat >"$cfile" <<EOF
 [terminal]
 vt = 7
 
@@ -7225,7 +7712,25 @@ source_profile = false
 command = "/usr/local/bin/noctalia-greeter-session"
 user = "_greeter"
 EOF
+	fi
 
+	# Login automático: o greetd roda a [initial_session] uma vez no boot,
+	# sem pedir senha; ao sair dela volta para a [default_session] (tela de
+	# login). O comando vem do Exec= do .desktop da sessão instalada.
+	if [[ "$LAUTOLOGIN" == true ]]; then
+		SESSION_NAME=$(sh_get_session_name)
+		exec_cmd=$(sed -n 's/^Exec=//p' "$dir_install/usr/share/wayland-sessions/${SESSION_NAME}.desktop" 2>/dev/null | head -n1)
+		if [[ -n "$exec_cmd" ]]; then
+			cat >>"$cfile" <<EOF
+
+[initial_session]
+command = "$exec_cmd"
+user = "$cuser"
+EOF
+		else
+			sh_info_msg "Greetd: sessão '${SESSION_NAME}' não encontrada, login automático não configurado"
+		fi
+	fi
 }
 
 sh_update_lightdm_conf() {
@@ -7260,6 +7765,16 @@ EOF
 last-user=$cuser
 last-session=$SESSION_NAME
 EOF
+	fi
+
+	# o ~/.cache do lightdm (/var/lib/lightdm/.cache) tem que ser do usuário
+	# lightdm: o mkdir acima roda como root (e a fonte local copia o .cache da
+	# ISO como estiver). Root-owned, o elephant-greeter (voidbr-lightdm-themes)
+	# morre no mkdir do próprio cache -> tela preta com o cursor piscando.
+	# --reference usa o dono do /var/lib/lightdm, sem resolver nome fora do
+	# chroot.
+	if [[ -d "$dir_install/var/lib/lightdm/.cache" ]]; then
+		chown -R --reference="$dir_install/var/lib/lightdm" "$dir_install/var/lib/lightdm/.cache"
 	fi
 
 }
@@ -7367,6 +7882,7 @@ sh_install_DE() {
 		"cinnamon") sh_cinnamon_meta_package ;;
 		"sway") sh_sway_meta_package ;;
 		"umbriel") sh_umbriel_meta_package ;;
+		"cosmic") sh_cosmic_meta_package ;;
 		"mango") sh_mango_meta_package ;;
 		"mate") sh_mate_meta_package ;;
 		esac
@@ -7540,7 +8056,7 @@ sh_install() {
 					# source!=local, ou LCUSTOM=true: instalação completa.
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Kernel')" "${akernel[*]}"
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Firmware')" "${afirmware[*]}"
-					sh_install_pkgs_in_chroot "$(gettext 'Instalando Daemons')" "${aPackageDaemons[*]}" sh_install_pkgs_in_chroot "$(gettext 'Instalando Utilitários')" "${aUtility[*]}"
+					sh_install_pkgs_in_chroot "$(gettext 'Instalando Daemons')" "${aPackageDaemons[*]}"
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Extras')" "${aExtra[*]}"
 					sh_install_pkgs_in_chroot "$(gettext 'Instalando Pacotes customizados')" "${aCustomPackages[*]}"
 				fi
@@ -7553,6 +8069,20 @@ sh_install() {
 			else
 				sh_limineInstall
 			fi
+
+			# Otimização de memória (swapfile + sysctl + zswap na cmdline): sempre.
+			# Depois do sh_make_fstab (que reescreve o fstab, onde entra o /swapfile)
+			# e do bootloader (precisa do /etc/default/grub ou /etc/default/limine).
+			# Com VOIDBR_INSTALLER=true (exportada no início) o otimizador só grava no
+			# destino: nada de swapon/sysctl/zswap no live, tudo vale no primeiro boot.
+			sh_chroot_job "$(gettext 'Otimizando uso de memória')" "
+        if command -v voidbr-low-ram-optimizer >/dev/null 2>&1; then
+          voidbr-low-ram-optimizer --install
+        elif command -v chili-low-ram-optimizer >/dev/null 2>&1; then
+          chili-low-ram-optimizer --install
+        fi
+        true
+      " "$err_not_fatal"
 
 			sh_set_edition_os_release "$(sh_get_edition_label)"
 
@@ -7611,14 +8141,31 @@ sh_install() {
 			sh_fix_gnome_wayland_session
 			sh_activating_services
 
-			if $LSERVER; then
+			# fonte local copia o sistema da ISO: LSERVER/LDHCP podem ter
+			# sobrado de uma escolha anterior via rede e não valem aqui
+			if [[ "${AConfMirror[_SOURCE]}" == "local" ]]; then
+				sh_update_sshd
+			elif $LSERVER; then
 				sh_create_empty_iptables_rules
 				if $LDHCP; then
 					sh_build_and_apply_dhcpcd_config
 				fi
 			else
+				if $LDHCP; then
+					sh_build_and_apply_nm_config
+				fi
 				sh_update_sshd
 			fi
+
+			# Define o tema Plymouth antes do reconfigure geral: assim o hook do
+			# kernel (20-initramfs) já gera o initramfs com o tema, e o post_install
+			# do voidbr-plymouth-theme (que confere com lsinitrd) não precisa refazê-lo.
+			# Sem isso, a ordem alfabética do --all configura o kernel antes do tema e
+			# o initramfs é gerado duas vezes. Se este passo falhar, segue como antes.
+			sh_chroot_job "$(gettext 'Configurando tema Plymouth')" "
+        xbps-query voidbr-plymouth-theme >/dev/null 2>&1 &&
+          xbps-reconfigure --force voidbr-plymouth-theme || true
+      "
 
 			sh_chroot_job "$(gettext 'Validando configuração para FINALIZAR')" "
         #xbps-reconfigure --force glibc-locales
@@ -7626,8 +8173,9 @@ sh_install() {
       "
 
 			sh_chroot_job "${cmsg_RemovendoPacotesAntigosObseletos}" "
-        rm -fv /var/cache/xbps/*.xbps
-        rm -fv /var/cache/xbps/*.sig*
+        rm -f /var/cache/xbps/*.xbps
+        rm -f /var/cache/xbps/*.sig*
+        rm -f /etc/default/grub.new-*
       "
 
 			sh_update_repository_main
@@ -7637,8 +8185,11 @@ sh_install() {
 				sh_hack_hyprland_lib
 			fi
 
+			[[ "$_WM" == "enlightenment" ]] && sh_configure_enlightenment_audio
+
 			sh_chmod_tmp
 			sh_update_etc_issue
+			sh_write_disk_health_log
 			sh_umount_fs
 			end_datetime=$(date)
 
@@ -7748,6 +8299,77 @@ sh_splitarray() {
 	echo "${array[pos - 1]}"
 }
 
+# Devolve (stdout) o número da primeira partição do disco cujo tipo GPT é o
+# GUID informado em $2, em qualquer posição do disco. O tipo é mais confiável
+# que o nome exibido pelo lsblk. Partições de device-mapper (ex.:
+# /dev/mapper/pve-base1) não têm o arquivo "partition" no sysfs; nesse caso o
+# número vem do final do nome. Retorna 1 se não houver nenhuma.
+sh_get_part_num_by_type() {
+	local disk="$1"
+	local guid="$2"
+	local path ptype num
+
+	while read -r path ptype; do
+		[[ "${ptype,,}" == "$guid" ]] || continue
+		num="$(cat "/sys/class/block/$(basename "$(readlink -f "$path")")/partition" 2>/dev/null)"
+		[[ -n "$num" ]] || num="$(grep -o '[0-9]*$' <<<"$path")"
+		[[ -n "$num" ]] && echo "$num" && return 0
+	done < <(lsblk -lnpo PATH,PARTTYPE "$disk" 2>/dev/null)
+	return 1
+}
+
+sh_get_biosboot_num() {
+	sh_get_part_num_by_type "$1" "21686148-6449-6e6f-744e-656564454649"
+}
+
+sh_get_esp_num() {
+	sh_get_part_num_by_type "$1" "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+}
+
+# Confere a partição BIOS boot no disco do bootloader e ajusta LBIOS e
+# _PART_BIOS_NUM. Regra: só é obrigatória quando o sistema iniciou sem UEFI
+# e o disco é GPT. Em UEFI sem ela, o boot BIOS é simplesmente pulado.
+# $1 = true mostra o aviso de "apenas UEFI" (usado no Feito do FileSystem).
+sh_check_biosboot() {
+	local laviso="${1:-false}"
+	local disk="${AConfDisk[_BOOTLOADER]}"
+
+	LBIOS=true
+	_PART_BIOS_NUM=''
+
+	# MBR não usa partição BIOS boot
+	[[ "$(lsblk -dno PTTYPE "$disk" 2>/dev/null)" == "gpt" ]] || return 0
+
+	if _PART_BIOS_NUM="$(sh_get_biosboot_num "$disk")"; then
+		return 0
+	fi
+
+	if sh_getBootEFI && [[ "${AConfDisk[_DISKTABLE]}" != "GPT_BIOS" ]]; then
+		# Sem BIOS boot e sem ESP o disco não inicia de jeito nenhum
+		if ! sh_get_esp_num "$disk" >/dev/null; then
+			alerta "=== UEFI ===" \
+				"${BOLD}${RED}$(gettext 'ERRO:')${RESET} $(gettext 'o sistema iniciou em UEFI, mas o disco não tem partição EFI System.')" \
+				"$(gettext 'Crie uma partição de') ${CYAN}512 MiB${RESET} $(gettext 'do tipo') ${CYAN}EFI System${RESET} (vfat) $(gettext 'no disco') ${disk}" \
+				"$(gettext 'ou use o particionamento automático.')"
+			return 1
+		fi
+		LBIOS=false
+		if $laviso && [[ "${_UEFI_AVISADO:-}" != "$disk" ]]; then
+			_UEFI_AVISADO="$disk"
+			info "=== BIOS BOOT ===" \
+				"\n$(gettext 'Partição BIOS boot não encontrada no disco') ${disk}." \
+				"\n${BOLD}${YELLOW}$(gettext 'O sistema vai iniciar apenas em modo UEFI.')${RESET}"
+		fi
+		return 0
+	fi
+
+	alerta "=== BIOS BOOT ===" \
+		"${BOLD}${RED}$(gettext 'ERRO:')${RESET} $(gettext 'disco GPT em modo BIOS precisa de uma partição BIOS boot.')" \
+		"$(gettext 'Crie uma partição de') ${CYAN}2 MiB${RESET} $(gettext 'do tipo') ${CYAN}BIOS boot${RESET} $(gettext 'no disco') ${disk}" \
+		"$(gettext 'ou use o particionamento automático.')"
+	return 1
+}
+
 sh_validate_filesystem() {
 	local mntpoint
 	local fstype
@@ -7820,16 +8442,10 @@ ${BOLD}${RED}$(gettext "Deseja continuar sem suporte a UEFI?")\n\n"; then
 		fi
 	fi
 
-	if $LEFI; then
-		for i in {0..9}; do
-			[[ "$(sh_splitarray "${AARRAY_PART_DEVICES[${AConfDisk[_BOOTLOADER]}${ext}${i}]}" 8)" = "BIOS boot" ]] && {
-				LBIOS=true
-				break
-			} || LBIOS=false
-		done
-		if ! $LBIOS; then # alguns device block em lvm não são detectados pelo lsblk
-			[[ -n "$(sh_splitarray "${AARRAY_PART_DEVICES[${AConfDisk[_BOOTLOADER]}${ext}1]}" 8)" ]] && LBIOS=true
-		fi
+	# alguns device block em lvm não são detectados pelo lsblk
+	if ! sh_check_biosboot false; then
+		DEFITEM="FileSystem"
+		return 1
 	fi
 
 	for i in "${!Amntpoint[@]}"; do
@@ -7934,8 +8550,344 @@ sh_getyes() {
 	esac
 }
 
+# Lista (stdout, já com \n e cores do dialog) as partições de um único disco:
+# nome, sistema de arquivos, tamanho e tipo. Partições ntfs recebem a marca
+# "← Windows". Retorna 0 se encontrou ntfs (Windows) no disco, 1 se não.
+sh_lista_particoes() {
+	local disk="$1"
+	local line PATH_ TYPE_ FSTYPE_ SIZE_ PARTTYPENAME_
+	local cmarca
+	local lwin=false
+
+	while read -r line; do
+		PATH_='' TYPE_='' FSTYPE_='' SIZE_='' PARTTYPENAME_=''
+		eval "${line//=/_=}"
+		[[ "$TYPE_" == "part" ]] || continue
+		cmarca=''
+		if [[ "$FSTYPE_" == "ntfs" ]]; then
+			lwin=true
+			cmarca="${RED}← Windows${RST}"
+		fi
+		printf '  %-14s %-6s %7s  %s %s\\n' "${PATH_##*/}" "$FSTYPE_" "$SIZE_" "$PARTTYPENAME_" "$cmarca"
+	done < <(lsblk -npPo PATH,TYPE,FSTYPE,SIZE,PARTTYPENAME "$disk" 2>/dev/null)
+	$lwin
+}
+
+# Chamada no Armazenamento, depois do Selecionar, quando o disco já tem
+# partições e o usuário não passou pelo particionamento (muitos não percebem
+# o botão Particionamento). Retorna 0 se ele escolheu particionar agora.
+sh_disco_com_particoes() {
+	local disk="$1"
+	local cpartes
+	local lwin=false
+	local cusar="$(gettext 'Usar')"
+	local cparticionar="$(gettext 'Particionar')"
+	local cdefault
+	local opc
+	local pttype
+	local ctab
+	local cfdisk
+
+	# blkid -p lê o disco direto; o lsblk usa o banco do udev, que pode
+	# estar desatualizado logo após um particionamento externo.
+	pttype="$(blkid -p -s PTTYPE -o value "$disk" 2>/dev/null)"
+	[[ -z "$pttype" ]] && pttype="$(lsblk -dno PTTYPE "$disk" 2>/dev/null)"
+	case "$pttype" in
+	gpt) ctab='GPT' ;;
+	dos) ctab='MBR' ;;
+	*) ctab="$(gettext 'desconhecida')" ;;
+	esac
+
+	# Tabela de partições do fdisk: é o 2º bloco da saída (o 1º é o cabeçalho
+	# do disco). Pegar por bloco funciona em qualquer idioma.
+	cfdisk="$(fdisk -l "$disk" 2>/dev/null | awk 'BEGIN{RS=""} NR==2')"
+
+	# sh_lista_particoes continua sendo chamada: é ela que detecta o Windows.
+	cpartes="$(sh_lista_particoes "$disk")" && lwin=true
+	[[ -n "$cfdisk" ]] && cpartes="${cfdisk//$'\n'/\\n}\\n"
+	$lwin && cdefault="$cusar" || cdefault="$cparticionar"
+
+	opc=$(${DIALOG} \
+		--backtitle "$ccabec" \
+		--colors \
+		--no-collapse \
+		--no-cancel \
+		--default-item "$cdefault" \
+		--ok-label "${cmsg_Aceitar}" \
+		--title "${cmsg_Disco}" \
+		--menu "$(gettext 'Disco:')  ${CYAN}${disk}${RST}\n$(gettext 'Modelo:') ${CYAN}${MODEL_ORIGEM} · ${SIZE_ORIGEM}${RST}\n$(gettext 'Tabela:') ${CYAN}${ctab}${RST}\n\n\
+${cpartes}${cpartes:+\n}\
+$(gettext 'O Disco acima já possui partições. Você quer usar essas partições assim mesmo ou particionar o disco agora?')\n\
+$(gettext 'Se não tiver certeza, use o particionamento automático: ele apaga somente este disco e cria o layout ideal.')\n" \
+		0 0 2 \
+		"$cusar" "$(gettext 'Usar as partições atuais (definir no FileSystem)')" \
+		"$cparticionar" "$(gettext 'Abrir o particionamento (automático recomendado)')" \
+		2>&1 >/dev/tty)
+
+	if [[ "$opc" == "$cusar" ]]; then
+		LUSAR_DEVICE="$disk"
+		LUSAR_SIG="$(sh_disk_assinatura "$disk")"
+	fi
+	[[ "$opc" == "$cparticionar" ]]
+}
+
+# Chamada no Feito do FileSystem quando o layout não passou na validação.
+# Recomenda o particionamento automático, explicando os benefícios e listando
+# exatamente o que será apagado (só as partições DESTE disco). Se houver
+# Windows no disco, o cursor começa em "Corrigir" em vez de "Automático".
+# Devolve (stdout): auto | corrigir | menu
+sh_fs_layout_invalido() {
+	local disk="${AConfDisk[_DEVICE]}"
+	local line
+	local lwin=false
+	local cpartes=''
+	local coutros=''
+	local cauto="$(gettext 'Automático')"
+	local ccorrigir="$(gettext 'Corrigir')"
+	local cmenu="$(gettext 'Menu')"
+	local cdefault
+	local opc
+
+	cpartes="$(sh_lista_particoes "$disk")" && lwin=true
+
+	while read -r line; do
+		[[ "$line" == "$disk" ]] && continue
+		coutros+="${line##*/}, "
+	done < <(lsblk -dnpo NAME,TYPE 2>/dev/null | awk '$2 == "disk" && $1 !~ /\/(zram|ram)[0-9]+$/ {print $1}')
+	coutros="${coutros%, }"
+
+	$lwin && cdefault="$ccorrigir" || cdefault="$cauto"
+
+	opc=$(${DIALOG} \
+		--backtitle "$ccabec" \
+		--colors \
+		--no-cancel \
+		--default-item "$cdefault" \
+		--ok-label "${cmsg_Aceitar}" \
+		--title "${cmsg_TitleFileSystem}" \
+		--menu "\n$(gettext 'O layout do disco') ${CYAN}${disk}${RST} $(gettext 'não está pronto para a instalação.')\n\n\
+${YELLOW}$(gettext 'Recomendado: particionamento automático')${RST}\n\
+ ${GREEN}✓${RST} $(gettext 'layout testado (BIOS boot, EFI, raiz, swap/home opcionais)')\n\
+ ${GREEN}✓${RST} $(gettext 'inicia em UEFI e em BIOS')\n\
+ ${GREEN}✓${RST} $(gettext 'pontos de montagem e formatação já definidos')\n\
+ ${GREEN}✓${RST} $(gettext 'opção de criptografia (LUKS) e LVM')\n\n\
+$(gettext 'O automático apaga') ${RED}$(gettext 'somente')${RST} $(gettext 'o disco') ${CYAN}${disk}${RST} (${MODEL_ORIGEM} · ${SIZE_ORIGEM}):\n\
+${cpartes}\
+${coutros:+\n${GREEN}$(gettext 'Os outros discos') (${coutros}) $(gettext 'NÃO serão alterados.')${RST}\n}" \
+		0 0 3 \
+		"$cauto" "$(gettext 'Particionar automaticamente (recomendado)')" \
+		"$ccorrigir" "$(gettext 'Voltar à lista e ajustar manualmente')" \
+		"$cmenu" "$(gettext 'Voltar ao menu (FileSystem fica pendente)')" \
+		2>&1 >/dev/tty)
+
+	case "$opc" in
+	"$cauto") echo "auto" ;;
+	"$cmenu") echo "menu" ;;
+	*) echo "corrigir" ;;
+	esac
+}
+
+# Chamada no Feito, depois da validação: se a raiz não vai ser formatada e já
+# tem arquivos, avisa que o VoidBR será instalado por cima deles e oferece
+# formatar. A partição é montada só para leitura e desmontada logo em seguida.
+sh_check_root_reuso() {
+	local part="$_PART_ROOT"
+	local fs fmt tmp
+	local lcheio=false
+	local cformatar="$(gettext 'Formatar')"
+	local cmanter="$(gettext 'Manter')"
+	local opc
+
+	[[ -n "$part" ]] || return 0
+	fs="$(sh_splitarray "${Amntpoint[$part]}" 2)"
+	fmt="$(sh_splitarray "${Amntpoint[$part]}" 3)"
+	[[ "$fmt" == "0" ]] || return 0
+
+	tmp="$(mktemp -d)"
+	if mount -o ro "$part" "$tmp" 2>/dev/null; then
+		[[ -n "$(find "$tmp" -mindepth 1 -maxdepth 1 ! -name lost+found -print -quit 2>/dev/null)" ]] && lcheio=true
+		umount "$tmp" 2>/dev/null
+	fi
+	rmdir "$tmp" 2>/dev/null
+	$lcheio || return 0
+
+	opc=$(${DIALOG} \
+		--backtitle "$ccabec" \
+		--colors \
+		--no-cancel \
+		--default-item "$cformatar" \
+		--ok-label "${cmsg_Aceitar}" \
+		--title "${cmsg_TitleFileSystem}" \
+		--menu "\n$(gettext 'A partição') ${CYAN}${part}${RST} ($(gettext 'raiz') /) ${YELLOW}$(gettext 'NÃO será formatada')${RST} $(gettext 'e já contém arquivos.')\n\
+$(gettext 'O VoidBR será instalado por cima deles, misturando com o que já existe.')\n" \
+		0 0 2 \
+		"$cformatar" "$(gettext 'Formatar a partição e instalar do zero (recomendado)')" \
+		"$cmanter" "$(gettext 'Instalar por cima mesmo assim')" \
+		2>&1 >/dev/tty)
+
+	if [[ "$opc" == "$cformatar" ]]; then
+		Amntpoint["$part"]="/|$fs|1"
+		Amkfs+=(["$fs"]="mkfs.$fs")
+	fi
+	return 0
+}
+
+# Confere se o layout atual do disco atende ao esquema mínimo exigido pelo
+# instalador (o mesmo que o particionamento automático cria). Identifica as
+# partições pelo TIPO (PARTTYPENAME), não pelo número nem pelo label, já que
+# muitos usuários particionam com ferramentas externas (GParted etc.).
+# Imprime o relatório (✓/✗) e retorna 0 se atende, 1 se não atende.
+sh_check_layout() {
+	local disk="$1"
+	local pttype
+	local ctab
+	local lefi=false
+	local lok=true
+	local nbios=0 nesp=0 nroot=0
+	local line PATH_ TYPE_ FSTYPE_ PARTTYPENAME_
+	local report=''
+
+	# Modo BIOS escolhido no automático (GPT_BIOS/MBR_BIOS) numa máquina UEFI:
+	# o layout é conferido como BIOS, igual ao que o sh_validate_filesystem faz.
+	if sh_getBootEFI && [[ "${AConfDisk[_DISKTABLE]}" != "GPT_BIOS" && "${AConfDisk[_DISKTABLE]}" != "MBR_BIOS" ]]; then
+		lefi=true
+	fi
+	pttype="$(lsblk -dno PTTYPE "$disk" 2>/dev/null)"
+	ctab="${pttype^^}"
+	[[ "$pttype" == "dos" ]] && ctab="MBR"
+
+	while read -r line; do
+		PATH_='' TYPE_='' FSTYPE_='' PARTTYPENAME_=''
+		eval "${line//=/_=}"
+		[[ "$TYPE_" == "part" ]] || continue
+		case "$PARTTYPENAME_" in
+		"BIOS boot") ((++nbios)) ;;
+		"EFI System") ((++nesp)) ;;
+		*swap* | "Extended" | "Microsoft reserved" | "Windows recovery environment") ;;
+		*)
+			case "$FSTYPE_" in
+			crypto_LUKS | ntfs | vfat | exfat) ;;
+			*) ((++nroot)) ;;
+			esac
+			;;
+		esac
+	done < <(lsblk -npPo PATH,TYPE,FSTYPE,PARTTYPENAME "$disk" 2>/dev/null)
+
+	$lefi && report+="$(gettext 'Modo de boot:') ${BOLD}UEFI${RESET}\n" || report+="$(gettext 'Modo de boot:') ${BOLD}BIOS${RESET}\n"
+
+	if [[ -z "$pttype" ]]; then
+		report+="${RED}✗${RESET} $(gettext 'Disco sem tabela de partições')\n"
+		lok=false
+	elif $lefi && [[ "$pttype" != "gpt" ]]; then
+		report+="${RED}✗${RESET} $(gettext 'Tabela') ${ctab} $(gettext '— em UEFI a tabela precisa ser GPT')\n"
+		lok=false
+	else
+		report+="${GREEN}✓${RESET} $(gettext 'Tabela') ${ctab}\n"
+	fi
+
+	if [[ "$pttype" == "gpt" ]]; then
+		if ((nbios)); then
+			report+="${GREEN}✓${RESET} $(gettext 'Partição BIOS boot')\n"
+		elif $lefi; then
+			report+="${YELLOW}-${RESET} $(gettext 'Partição BIOS boot (opcional em UEFI)')\n"
+		else
+			report+="${RED}✗${RESET} $(gettext 'Falta partição BIOS boot (obrigatória em BIOS com GPT)')\n"
+			lok=false
+		fi
+	fi
+
+	if $lefi; then
+		if ((nesp)); then
+			report+="${GREEN}✓${RESET} $(gettext 'Partição EFI System')\n"
+		else
+			report+="${RED}✗${RESET} $(gettext 'Falta partição EFI System (obrigatória em UEFI)')\n"
+			lok=false
+		fi
+	fi
+
+	if ((nroot)); then
+		report+="${GREEN}✓${RESET} $(gettext 'Partição disponível para a raiz (/)')\n"
+	else
+		report+="${RED}✗${RESET} $(gettext 'Nenhuma partição disponível para a raiz (/)')\n"
+		lok=false
+	fi
+
+	echo "$report"
+	$lok
+}
+
+# Chamada no Instalar quando o bootloader é o Limine: ele copia o kernel e o
+# initramfs para a ESP (via update-limine), então uma ESP pequena, como a de
+# 100 MiB do Windows, pode encher. Pergunta se continua mesmo assim.
+sh_check_esp_limine() {
+	local part="$_PART_BOOT"
+	local nbytes nmib
+
+	[[ -n "$part" ]] || return 0
+	nbytes="$(lsblk -bdno SIZE "$part" 2>/dev/null)"
+	[[ -n "$nbytes" ]] || return 0
+	nmib=$((nbytes / 1024 / 1024))
+	((nmib >= 300)) && return 0
+
+	conf "${cmsg_BootLoader^^}" \
+		"\n$(gettext 'A partição EFI') ${CYAN}${part}${RST} $(gettext 'tem só') ${YELLOW}${nmib} MiB${RST}." \
+		"\n$(gettext 'O Limine copia o kernel e o initramfs para ela, e esse espaço pode não ser suficiente.')" \
+		"\n$(gettext 'Recomendado: partição EFI com 300 MiB ou mais, ou usar o GRUB como bootloader.')" \
+		"\n\n${BOLD}${YELLOW}$(gettext 'Deseja continuar mesmo assim?')${RST}"
+}
+
+# Abre o particionamento a partir do FileSystem (item ">> Particionar disco"
+# ou botão Particionamento): mesmo menu do Armazenamento. Se a tabela de
+# partições mudou por uma ferramenta manual (cfdisk, fdisk...), refaz os pontos
+# de montagem a partir do disco. No automático não precisa: o próprio
+# sh_mkparted já monta o Amntpoint certo.
+sh_fs_particionar() {
+	local antes depois
+
+	antes="$(lsblk -nrpo NAME,SIZE,PARTTYPE,FSTYPE "${AConfDisk[_DEVICE]}" 2>/dev/null)"
+	sh_checkdisk "${AConfDisk[_DEVICE]}"
+	sh_menuUtilDisk
+	depois="$(lsblk -nrpo NAME,SIZE,PARTTYPE,FSTYPE "${AConfDisk[_DEVICE]}" 2>/dev/null)"
+	if [[ "$antes" != "$depois" ]] && ! $LAUTO; then
+		sh_rebuild_amntpoint_for_new_disk
+	fi
+}
+
 sh_choose_Partition() {
 	sh_umount_fs
+
+	# Confere o layout do disco uma vez, ao entrar: o usuário fica sabendo do
+	# problema antes de configurar as partições (o Feito confere de novo). Se o
+	# layout estiver certo, só avisa quando não houver BIOS boot (apenas UEFI).
+	local clayout
+	if $LDISK; then
+		if ! clayout="$(sh_check_layout "${AConfDisk[_DEVICE]}")"; then
+			if conf "${cmsg_TitleFileSystem}" \
+				"\n$(gettext 'O layout do disco') ${CYAN}${AConfDisk[_DEVICE]}${RST} $(gettext 'não atende ao esquema exigido:')\n\n" \
+				"${clayout}" \
+				"\n${BOLD}${YELLOW}$(gettext 'Deseja ir para o particionamento agora?')${RST}"; then
+				sh_fs_particionar
+			fi
+		else
+			sh_check_biosboot true
+		fi
+	fi
+
+	# Raiz sugerida num disco particionado fora do instalador: avisa uma vez por
+	# que ela não será formatada (pode conter dados) e como mudar isso.
+	if ${LROOT_AVISO:-false} && [[ "$(sh_splitarray "${Amntpoint[$_ROOT_SUGERIDA]}" 1)" == "/" ]]; then
+		info "${cmsg_TitleFileSystem}" \
+			"\n$(gettext 'A partição') ${CYAN}${_ROOT_SUGERIDA}${RST} $(gettext 'foi sugerida como raiz') (/)," \
+			"$(gettext 'mas') ${BOLD}${RED}$(gettext 'NÃO será formatada')${RST}: $(gettext 'ela foi criada fora do instalador e pode conter dados.')" \
+			"" \
+			"${BOLD}$(gettext 'Para instalar do zero nela:')${RST}" \
+			"  ${BOLD}${GREEN}1.${RST} $(gettext 'selecione a partição na lista e escolha') ${YELLOW}$(gettext 'Mudar')${RST};" \
+			"  ${BOLD}${GREEN}2.${RST} $(gettext 'escolha o sistema de arquivos') (${YELLOW}ext4${RST} $(gettext 'é o recomendado'));" \
+			"  ${BOLD}${GREEN}3.${RST} $(gettext 'confirme o ponto de montagem') ${YELLOW}/${RST};" \
+			"  ${BOLD}${GREEN}4.${RST} $(gettext 'em') ${YELLOW}$(gettext 'Criar um novo sistema de arquivos')${RST}, $(gettext 'responda') ${YELLOW}$(gettext 'Sim')${RST}."
+		LROOT_AVISO=false
+	fi
+
 	while true; do
 		sh_disk_part_info
 		local array=()
@@ -7954,6 +8906,8 @@ sh_choose_Partition() {
 		local part=
 		local -A Aoldfstype=()
 		local dsk
+		local citem=">> $(gettext 'Particionar disco')"
+		local cdefault="${AsFs[_DEVICE]}$(sh_getNvme)1"
 
 		if ! $LDISK; then
 			info "${cmsg_TitleFileSystem}" "\n\n${RED}$(gettext 'Disco de armazenamento não foi escolhido')${RST}"
@@ -7980,9 +8934,23 @@ sh_choose_Partition() {
 		fi
 
 		if [[ "${#ARRAY_PART_DEVICES[@]}" -eq 0 ]]; then
-			info "${cmsg_TitleFileSystem}" "\n\n${RED}$(gettext 'Disco de armazenamento não foi particionado')${RST}"
+			if conf "${cmsg_TitleFileSystem}" \
+				"\n\n${RED}$(gettext 'Disco de armazenamento não foi particionado')${RST}" \
+				"\n\n${BOLD}${YELLOW}$(gettext 'Deseja particionar agora?')${RST}"; then
+				sh_fs_particionar
+				continue
+			fi
 			return 1
 		fi
+
+		# Layout fora do esquema: o cursor já começa no ">> Particionar disco".
+		sh_check_layout "${AConfDisk[_DEVICE]}" >/dev/null || cdefault="$citem"
+
+		# Primeira linha da lista: atalho visível para o particionamento
+		# (muitos usuários não percebem o botão no rodapé).
+		array[n++]="$citem"
+		array[n++]="$(printf "$sep%s" "$(gettext 'Abrir o particionamento (automático, cfdisk, fdisk, gdisk, parted)')")"
+		nlen=${#citem}
 
 		for i in "${ARRAY_PART_DEVICES[@]}"; do
 			array[n++]="$i"
@@ -8005,7 +8973,7 @@ sh_choose_Partition() {
 		((nlen += 6))
 		part=$(${DIALOG} \
 			--defaultno \
-			--default-item "${AsFs[_DEVICE]}$(sh_getNvme)1" \
+			--default-item "$cdefault" \
 			--backtitle "$ccabec" \
 			--title "${cmsg_TitleFileSystem}" \
 			--ok-label "${cmsg_Mudar}" \
@@ -8013,6 +8981,8 @@ sh_choose_Partition() {
 			--colors \
 			--extra-button \
 			--extra-label "${cmsg_info_particao}" \
+			--help-button \
+			--help-label "$(gettext 'Particionamento')" \
 			--menu "${cmsg_MENU}\n\n\
 $(printf "%${nlen}s$sep%-11s$sep%6s$sep%-20s$sep%-20s$sep%-20s$sep%-8s$sep%s" \
 				"PARTITION" \
@@ -8027,20 +8997,48 @@ $(printf "%${nlen}s$sep%-11s$sep%6s$sep%-20s$sep%-20s$sep%-20s$sep%-8s$sep%s" \
 
 		exit_status=$?
 		dsk="${part%%[p0-9]*([0-9])}"
+		[[ "$part" == "$citem" ]] && dsk="${AConfDisk[_DEVICE]}"
 
 		case $exit_status in
 		"$D_ESC" | "$D_CANCEL")
-			LFS=true
-			LPARTITION=true
-			LFSREVISED=true
-			return 0
+			# Feito: valida o layout configurado (raiz, ESP, BIOS boot, pontos
+			# de montagem repetidos) antes de aceitar. Se não passar, recomenda o
+			# particionamento automático; o usuário também pode corrigir na lista
+			# ou voltar ao menu com o FileSystem pendente.
+			if sh_validate_filesystem; then
+				sh_check_root_reuso
+				LFS=true
+				LPARTITION=true
+				LFSREVISED=true
+				return 0
+			fi
+			case "$(sh_fs_layout_invalido)" in
+			auto)
+				sh_auto_partition
+				;;
+			menu)
+				LFSREVISED=false
+				DEFITEM="FileSystem"
+				return 1
+				;;
+			esac
+			continue
 			;;
 		3)
 			result=$(fdisk -x "$dsk")
 			display_result "$result" "${cmsg_part_disk^^}"
 			continue
 			;;
+		"$D_HELP")
+			sh_fs_particionar
+			continue
+			;;
 		esac
+
+		if [[ "$part" == "$citem" ]]; then
+			sh_fs_particionar
+			continue
+		fi
 
 		oldfstype="${Aoldfstype[$part]}"
 		oldmntpoint="$(sh_splitarray "${Amntpoint[$part]}" 1)"
@@ -8241,6 +9239,104 @@ sh_getparamfile() {
 	return 1
 }
 
+# Submenu Regional: agrupa Teclado, Timezone e Locale, que antes eram três
+# itens separados no menu principal. Ao concluir um item, o cursor desce para
+# o próximo; ao concluir o Locale com os três definidos, volta ao menu principal.
+sh_menu_regional() {
+	local cOK="${RST}${BOLD}${GREEN}✓ ${RST}${YELLOW}"
+	local cNOK="${RST}${BOLD}${RED}✗ ${RST}${UNDERLINE}${BOLD}${RED}[${cmsg_Nao_definido}]${RST} ● "
+	local item="${cmsg_Teclado}"
+	local opc
+	local m_keymap m_timezone m_locale
+
+	while true; do
+		$LKEYMAP && m_keymap="${cOK}[${AConfLocale[_KEYMAP]}]${RST} ● " ||
+			m_keymap="${cNOK}"
+		$LTIMEZONE && m_timezone="${cOK}[${AConfLocale[_TIMEZONE]}]${RST} ● " ||
+			m_timezone="${cNOK}"
+		$LLOCALE && m_locale="${cOK}[${AConfLocale[_LOCALE]} ${AConfLocale[_REGION]}]${RST} ● " ||
+			m_locale="${cNOK}"
+
+		opc=$(${DIALOG} \
+			--backtitle "$ccabec" \
+			--clear \
+			--colors \
+			--default-item "$item" \
+			--ok-label "${cmsg_Aceitar}" \
+			--cancel-label "${cmsg_ButtonBack}" \
+			--title "$APP - Regional" \
+			--menu "${RESET}${cmsg_MENU}" \
+			12 100 3 \
+			"${cmsg_Teclado}" "${m_keymap}${cmsg_descTeclado}" \
+			"Timezone" "${m_timezone}${cmsg_descTimezone}" \
+			"Locale" "${m_locale}${cmsg_descLocale}" \
+			2>&1 >/dev/tty) || return 0
+
+		case "$opc" in
+		"${cmsg_Teclado}") sh_chooseKeymap && $LKEYMAP && item="Timezone" ;;
+		"Timezone") sh_chooseTimezone && $LTIMEZONE && item="Locale" ;;
+		"Locale")
+			if sh_chooseLocale && $LKEYMAP && $LTIMEZONE && $LLOCALE; then
+				return 0
+			fi
+			;;
+		esac
+	done
+}
+
+# Submenu Avançado: agrupa Saúde do disco, Fde, Lvm, Vg e Clonedisk, que
+# antes ficavam soltos no menu principal, abaixo do '↑↓'.
+sh_menu_avancado() {
+	local cOK="${RST}${BOLD}${GREEN}"
+	local cNAO="${RST}${YELLOW}"
+	# "menu" precisa ter esse nome: sh_confLvm lê $menu ("Fde" ou "Lvm")
+	# para decidir se configura com ou sem criptografia.
+	local menu
+	local item="${cmsg_Saude_disco}"
+	local m_fde m_lvm
+
+	while true; do
+		$LFDE && m_fde="${cOK}[$(gettext 'sim')]${RST} " || m_fde="${cNAO}[$(gettext 'não')]${RST} "
+		$LVM && m_lvm="${cOK}[$(gettext 'sim')]${RST} " || m_lvm="${cNAO}[$(gettext 'não')]${RST} "
+
+		menu=$(${DIALOG} \
+			--backtitle "$ccabec" \
+			--clear \
+			--colors \
+			--default-item "$item" \
+			--ok-label "${cmsg_Aceitar}" \
+			--cancel-label "${cmsg_ButtonBack}" \
+			--title "$APP - $(gettext 'Avançado')" \
+			--menu "${RESET}${cmsg_MENU}" \
+			14 100 5 \
+			"${cmsg_Saude_disco}" "${cmsg_Testar_Saude_disco} ${AConfDisk[_HEALTH]}" \
+			"Fde" "${m_fde}$(gettext 'Criptografia de disco completo + LVM (opcional)')" \
+			"Lvm" "${m_lvm}$(gettext 'Gerenciamento de Volume Lógico LVM (opcional)')" \
+			"Vg" "Delete/Clear Volume Group (VG) from LVM (optional)" \
+			"Clonedisk" "$(gettext 'Utilitário para clonar discos (opcional)')" \
+			2>&1 >/dev/tty) || return 0
+
+		item="$menu"
+		case "$menu" in
+		"${cmsg_Saude_disco}") sh_check_disk_health ;;
+		"Fde")
+			if sh_confLvm && $LFDE; then
+				DEFITEM="${cmsg_Instalar}"
+				return 0
+			fi
+			;;
+		"Lvm")
+			if sh_confLvm && $LVM; then
+				DEFITEM="${cmsg_Instalar}"
+				return 0
+			fi
+			;;
+		"Vg") sh_chooseVg ;;
+		"Clonedisk") sh_run_binary 'void-clonedisk' ;;
+		esac
+	done
+}
+
 sh_main_menu() {
 	local cOK="${RST}${BOLD}${GREEN}✓ ${RST}${YELLOW}"
 	local cNOK="${RST}${BOLD}${RED}✗ ${cERRO}[${cmsg_Nao_definido}]${RST} ● "
@@ -8279,6 +9375,11 @@ sh_main_menu() {
 			MENU_TIMEZONE="${cNOK}"
 		$LLOCALE && MENU_LOCALE="${cOK}[${AConfLocale[_LOCALE]} ${AConfLocale[_REGION]}]${RST} ● " ||
 			MENU_LOCALE="${cNOK}"
+		if $LKEYMAP && $LTIMEZONE && $LLOCALE; then
+			MENU_REGIONAL="${cOK}[${AConfLocale[_KEYMAP]} · ${AConfLocale[_TIMEZONE]} · ${AConfLocale[_LOCALE]}]${RST} ● "
+		else
+			MENU_REGIONAL="${cNOK}"
+		fi
 		$LKERNEL && MENU_KERNEL="${cOK}[${AConfKernel[_KERNEL]}]${RST} ● " ||
 			MENU_KERNEL="${cNOK}"
 
@@ -8313,9 +9414,7 @@ sh_main_menu() {
 			"${cmsg_Disco}" "${MENU_DEVICE}${cmsg_descDisco}" \
 			"FileSystem" "${MENU_FS}${cmsg_descFileSystem}" \
 			"${cmsg_BootLoader}" "${MENU_BOOTLOADER}${cmsg_descBootLoader}" \
-			"${cmsg_Teclado}" "${MENU_KEYMAP}${cmsg_descTeclado}" \
-			"Timezone" "${MENU_TIMEZONE}${cmsg_descTimezone}" \
-			"Locale" "${MENU_LOCALE}${cmsg_descLocale}" \
+			"Regional" "${MENU_REGIONAL}$(gettext 'Teclado, fuso horário e localidade')" \
 			"Kernel" "${MENU_KERNEL}${cmsg_descKernel}" \
 			"Wm" "${MENU_WM}${cmsg_descWm}" \
 			"Dm" "${MENU_DM}${cmsg_descDm}" \
@@ -8323,13 +9422,8 @@ sh_main_menu() {
 			"${cmsg_Usuario}" "${MENU_EXTRA}${cmsg_descExtra}" \
 			"${cmsg_Instalar}" "${cmsg_descInstalar}" \
 			'↑↓' '↓↑' \
-			"${cmsg_Saude_disco}" "${cmsg_Testar_Saude_disco} ${AConfDisk[_HEALTH]}" \
-			"Fde" "$(gettext 'Criptografia de disco completo + LVM (opcional)')" \
-			"Lvm" "$(gettext 'Gerenciamento de Volume Lógico LVM (opcional)')" \
-			"Vg" "Delete/Clear Volume Group (VG) from LVM (optional)" \
+			"$(gettext 'Avançado')" "$(gettext 'Saúde do disco, criptografia, LVM e utilitários de disco')" \
 			"${cmsg_Tema}" "$(gettext 'Seletor de temas do dialog (opcional)')" \
-			"${cmsg_Servicos}" "${cmsg_utilvoidservices}" \
-			"Clonedisk" "$(gettext 'Utilitário para clonar discos (opcional)')" \
 			"Wifi" "${cmsg_descWifi}" \
 			"Prompt" "$(gettext 'Prompt de comando - Exit para voltar')" \
 			"${cmsg_Sair}" "${cmsg_descSair}" \
@@ -8346,10 +9440,8 @@ sh_main_menu() {
 		"${cmsg_Source}") sh_chooseSource && [ -n "$LSOURCE" ] && DEFITEM="${cmsg_Disco}" ;;
 		"${cmsg_Disco}") sh_choose_disk && [ -n "$LDISK" ] && DEFITEM="FileSystem" ;;
 		"FileSystem") sh_choose_Partition && [ -n "$LPARTITION" ] && DEFITEM="${cmsg_BootLoader}" ;;
-		"${cmsg_BootLoader}") sh_choose_bootloadernew && [ -n "$LGRUB" ] && DEFITEM="${cmsg_Teclado}" ;;
-		"${cmsg_Teclado}") sh_chooseKeymap && [ -n "$LKEYMAP" ] && DEFITEM="Timezone" ;;
-		"Timezone") sh_chooseTimezone && [ -n "$LTIMEZONE" ] && DEFITEM="Locale" ;;
-		"Locale") sh_chooseLocale && [ -n "$LLOCALE" ] && DEFITEM="Kernel" ;;
+		"${cmsg_BootLoader}") sh_choose_bootloadernew && [ -n "$LGRUB" ] && DEFITEM="Regional" ;;
+		"Regional") sh_menu_regional && $LKEYMAP && $LTIMEZONE && $LLOCALE && DEFITEM="Kernel" ;;
 		"Kernel") sh_choose_kernel && [ -n "$LKERNEL" ] && DEFITEM="Wm" ;;
 		"Wm") sh_choose_wm && [ -n "$LWM" ] && DEFITEM="Dm" ;;
 		"Dm") sh_choose_dm && [ -n "$LDM" ] && DEFITEM="Audio" ;;
@@ -8357,13 +9449,8 @@ sh_main_menu() {
 		"${cmsg_Usuario}") sh_confadduser "$@" && [ -n "$LEXTRA" ] && DEFITEM="${cmsg_Instalar}" ;;
 		"${cmsg_Instalar}") sh_install ;;
 		'↑↓') : ;;
-		"${cmsg_Saude_disco}") sh_check_disk_health ;;
+		"$(gettext 'Avançado')") sh_menu_avancado ;;
 		"${cmsg_Tema}") sh_run_binary 'voidbr-dialog-theme-selector' ;;
-		"${cmsg_Servicos}") sh_run_binary 'void-services' "$LC_DEFAULT" "-g" ;;
-		"Clonedisk") sh_run_binary 'void-clonedisk' ;;
-		"Fde") sh_confLvm && [ -n "$LFDE" ] && DEFITEM="${cmsg_Instalar}" ;;
-		"Lvm") sh_confLvm && [ -n "$LVM" ] && DEFITEM="${cmsg_Instalar}" ;;
-		"Vg") sh_chooseVg ;;
 		"Wifi")
 			sh_run_binary 'voidbr-wifi-setup' && {
 				sh_check_internet && LHAS_INTERNET=true || LHAS_INTERNET=false
@@ -9600,6 +10687,14 @@ sh_alert_luks_remnant() {
 		"${BOLD}${YELLOW}$(gettext 'É necessário reparticionar o disco do zero para continuar.')${RST}"
 }
 
+# Assinatura do layout de um disco: tabela de partições lida direto do disco
+# pelo parted (início, fim, sistema de arquivos, nome e flags), sem depender
+# do kernel ou do udev já terem atualizado. Usada para saber se o disco
+# continua igual ao que o particionamento automático deixou.
+sh_disk_assinatura() {
+	parted -sm "$1" unit s print 2>/dev/null | tail -n +2
+}
+
 sh_rebuild_amntpoint_for_new_disk() {
 	local device="${AConfDisk[_DEVICE]}"
 	local efi_set=false
@@ -9608,6 +10703,7 @@ sh_rebuild_amntpoint_for_new_disk() {
 	local home_set=false
 	local luks_found=false
 	local fs
+	local acand_root=()
 
 	[[ -n "$device" ]] || return 1
 
@@ -9616,6 +10712,20 @@ sh_rebuild_amntpoint_for_new_disk() {
 	#      [[ "$fs" == "$device"* ]] && return 0
 	#   done
 	#
+	# Disco particionado pelo automático e ainda igual ao que ele criou: usa os
+	# pontos de montagem que o sh_mkparted definiu (ver LMKPARTED_SIG).
+	if [[ "$LMKPARTED_DEVICE" == "$device" && -n "$LMKPARTED_SIG" ]] &&
+		[[ "$(sh_disk_assinatura "$device")" == "$LMKPARTED_SIG" ]]; then
+		Amntpoint=()
+		for fs in "${!AmntpointAuto[@]}"; do
+			Amntpoint["$fs"]="${AmntpointAuto[$fs]}"
+		done
+		_ROOT_SUGERIDA=''
+		LROOT_AVISO=false
+		((${#Amntpoint[@]})) && LMKPARTED=true || LMKPARTED=false
+		return 0
+	fi
+
 	Amntpoint=()
 
 	while read -r line; do
@@ -9645,8 +10755,21 @@ sh_rebuild_amntpoint_for_new_disk() {
 		if [[ -n "$FSTYPE_" ]]; then
 			case "$FSTYPE_" in
 			vfat)
-				Amntpoint["$PATH_"]="/boot/efi|vfat|1"
-				efi_set=true
+				# Só a primeira partição do tipo EFI vira /boot/efi; outra vfat
+				# qualquer (dados, pendrive antigo) fica sem uso. Formata só a
+				# ESP criada pelo automático (label EFI); a de um disco
+				# particionado fora do instalador pode ter o boot do Windows ou
+				# de outro sistema, então é mantida.
+				if [[ "$PARTTYPENAME_" == *EFI* ]] && ! $efi_set; then
+					if [[ "$PARTLABEL_" == "EFI" ]]; then
+						Amntpoint["$PATH_"]="/boot/efi|vfat|1"
+					else
+						Amntpoint["$PATH_"]="/boot/efi|vfat|0"
+					fi
+					efi_set=true
+				else
+					Amntpoint["$PATH_"]="none|vfat|0"
+				fi
 				continue
 				;;
 			swap)
@@ -9672,8 +10795,10 @@ sh_rebuild_amntpoint_for_new_disk() {
 				continue
 				;;
 			*EFI*)
-				Amntpoint["$PATH_"]="/boot/efi|vfat|1"
-				efi_set=true
+				if ! $efi_set; then
+					Amntpoint["$PATH_"]="/boot/efi|vfat|1"
+					efi_set=true
+				fi
 				continue
 				;;
 			*swap*)
@@ -9707,17 +10832,33 @@ sh_rebuild_amntpoint_for_new_disk() {
 			;;
 		*)
 			case "$PTTYPE_" in
-			gpt) Amntpoint["$PATH_"]="none|$fs|0" ;;
+			gpt)
+				Amntpoint["$PATH_"]="none|$fs|0"
+				if [[ "$PARTTYPENAME_" == "Linux filesystem" || "$PARTTYPENAME_" == "Linux root (x86-64)" ]]; then
+					acand_root+=("$PATH_|$fs")
+				fi
+				;;
 			dos)
-				if ! $root_set; then
-					Amntpoint["$PATH_"]="/|$fs|1"
-					root_set=true
-				else
-					if ! $home_set; then
-						Amntpoint["$PATH_"]="/home|$fs|1"
-						home_set=true
+				# MBR não tem label de partição. Se o disco foi particionado
+				# pelo automático, mantém a dedução por posição (1ª raiz, 2ª
+				# home, formatando). Se foi particionado fora do instalador,
+				# não formata nada: usa a mesma sugestão de raiz do GPT.
+				if [[ "$LMKPARTED_DEVICE" == "$device" ]]; then
+					if ! $root_set; then
+						Amntpoint["$PATH_"]="/|$fs|1"
+						root_set=true
 					else
-						Amntpoint["$PATH_"]="none|$fs|0"
+						if ! $home_set; then
+							Amntpoint["$PATH_"]="/home|$fs|1"
+							home_set=true
+						else
+							Amntpoint["$PATH_"]="none|$fs|0"
+						fi
+					fi
+				else
+					Amntpoint["$PATH_"]="none|$fs|0"
+					if [[ "$PARTTYPENAME_" == "Linux" ]]; then
+						acand_root+=("$PATH_|$fs")
 					fi
 				fi
 				;;
@@ -9730,6 +10871,17 @@ sh_rebuild_amntpoint_for_new_disk() {
 			grep -P 'TYPE="(part)"' |
 			sort -k5,5 -k2,2
 	)
+
+	# Disco particionado fora do instalador (GPT sem o label ROOT do automático,
+	# ou MBR): se houver exatamente uma partição Linux, ela é sugerida como raiz,
+	# mas SEM formatar, porque pode conter dados. sh_choose_Partition explica.
+	_ROOT_SUGERIDA=''
+	LROOT_AVISO=false
+	if ! $root_set && ((${#acand_root[@]} == 1)); then
+		_ROOT_SUGERIDA="${acand_root[0]%%|*}"
+		Amntpoint["$_ROOT_SUGERIDA"]="/|${acand_root[0]#*|}|0"
+		LROOT_AVISO=true
+	fi
 
 	if $luks_found; then
 		sh_alert_luks_remnant
